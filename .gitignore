@@ -9,3 +9,4 @@ build/
 .idea/
 uv.lock
 .safety-project.ini
+.DS_Store
