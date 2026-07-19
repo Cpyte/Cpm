@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cpm"
+version = "1.0"
+description = "A package manager for cpy"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Albert" }
+]
+dependencies = [
+    "requests>=2.34.2",
+    "cpyte",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.1.1"]
+
+[project.urls]
+Homepage = "https://gitea.5gnew.io.vn/Cpyte-Project/Cpyte"
+
+[project.scripts]
+cpm = "cpyte.cli.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[[tool.uv.index]]
+name = "safety"
+url = "https://pkgs.safetycli.com/repository/teamparadox/project/wew-package-manager/pypi/simple/"
+default = false
