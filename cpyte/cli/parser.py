@@ -15,6 +15,12 @@ import difflib
 import sys
 from typing import List, Optional, Sequence
 
+try:
+    from importlib.metadata import version
+    CPM_VERSION = version("cpyte-cpm")
+except Exception:
+    CPM_VERSION = "1.1.3"
+
 from cpyte.cli.commands import (
     AddCommand,
     BuildCommand,
@@ -295,7 +301,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> ParsedCLI:
 
     # Handle top-level --version
     if known.version:
-        print("cpm 1.0")
+        print(f"cpm {CPM_VERSION}")
         raise SystemExit(0)
 
     # Handle top-level --help (only if no command follows)

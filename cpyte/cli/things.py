@@ -44,7 +44,7 @@ from cpyte.cli.commands import (
     GlobalOptions,
 )
 
-DEFAULT_REPO = "https://gitea.5gnew.io.vn/Cpyte-Project/Cpyte"
+DEFAULT_REPO = "https://cypackage.5gnew.io.vn"
 
 
 def _get_repos(global_opt: GlobalOptions, manifest: Manifest = None) -> list[str]:
