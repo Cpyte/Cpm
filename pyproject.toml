@@ -3,8 +3,8 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cpm"
-version = "1.1.0"
+name = "cpyte-cpm"
+version = "1.1.2"
 description = "A package manager for cpy"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,6 +31,13 @@ cpm = "cpyte.cli.main:main"
 dev = [
     "pytest>=9.1.1",
 ]
+
+# Default package registry for Cpyte packages
+# CPM uses https://cypackage.5gnew.io.vn/ as the default registry for Cpyte packages
+[[tool.uv.index]]
+name = "cypackage"
+url = "https://cypackage.5gnew.io.vn/simple/"
+default = true
 
 [[tool.uv.index]]
 name = "safety"

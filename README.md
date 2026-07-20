@@ -11,8 +11,10 @@ Resolve → Lower → Optimize → Execute
 ## Install
 
 ```bash
-pip install cpm
+pip install cpyte-cpm
 ```
+
+**Note:** CPM uses the Cpyte package registry at https://cypackage.5gnew.io.vn/ as the default package source for Cpyte packages.
 
 ## Quick Start
 
