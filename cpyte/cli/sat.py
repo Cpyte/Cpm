@@ -188,11 +188,30 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
 
         path = _package_path(name)
 
-        # Fetch metadata — prebuilt uses different path
+        # Fetch metadata — try different path formats for compatibility
         if prebuilt:
-            metadata = fetch_repo_multi(repos, f"metadata/prebuilt/{path}/{version}")
+            paths_to_try = [
+                f"metadata/prebuilt/{path}/{version}",
+                f"metadata/{path}/{version}",  # fallback
+            ]
         else:
-            metadata = fetch_repo_multi(repos, f"metadata/{path}/{version}")
+            paths_to_try = [
+                f"metadata/{path}/{version}",
+                f"metadata/{path}/latest",  # fallback to latest if version not found
+            ]
+        
+        metadata = None
+        last_error = None
+        for metadata_path in paths_to_try:
+            try:
+                metadata = fetch_repo_multi(repos, metadata_path)
+                break
+            except Exception as e:
+                last_error = e
+                continue
+        
+        if metadata is None:
+            raise last_error or RuntimeError(f"Could not fetch metadata for {name}@{version}")
 
         # Check claims — skip packages that don't match target
         claims = metadata.get("claims", {})
@@ -253,11 +272,30 @@ def resolve_remove(packages: list, repos: list[str], resolving=None, resolved=No
 
         path = _package_path(name)
 
-        # Fetch metadata — prebuilt uses different path
+        # Fetch metadata — try different path formats for compatibility
         if prebuilt:
-            metadata = fetch_repo_multi(repos, f"metadata/prebuilt/{path}/{version}")
+            paths_to_try = [
+                f"metadata/prebuilt/{path}/{version}",
+                f"metadata/{path}/{version}",  # fallback
+            ]
         else:
-            metadata = fetch_repo_multi(repos, f"metadata/{path}/{version}")
+            paths_to_try = [
+                f"metadata/{path}/{version}",
+                f"metadata/{path}/latest",  # fallback to latest if version not found
+            ]
+        
+        metadata = None
+        last_error = None
+        for metadata_path in paths_to_try:
+            try:
+                metadata = fetch_repo_multi(repos, metadata_path)
+                break
+            except Exception as e:
+                last_error = e
+                continue
+        
+        if metadata is None:
+            raise last_error or RuntimeError(f"Could not fetch metadata for {name}@{version}")
 
         # Check claims — skip packages that don't match target
         claims = metadata.get("claims", {})

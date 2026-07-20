@@ -14,7 +14,7 @@ Resolve → Lower → Optimize → Execute
 pip install cpyte-cpm
 ```
 
-**Note:** CPM uses the Cpyte package registry at https://cypackage.5gnew.io.vn/ as the default package source for Cpyte packages.
+**Note:** CPM uses the Cpyte package registry at https://cypackage.5gnew.io.vn/ as the default package source for Cpyte packages. The default registry is configured in pyproject.toml.
 
 ## Quick Start
 

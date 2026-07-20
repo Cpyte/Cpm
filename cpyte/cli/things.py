@@ -101,7 +101,17 @@ def _expand_groups(specs: list[PackageSpec], repos: list[str]) -> list[PackageSp
             try:
                 packages = fetch_group(repos, spec.name)
                 for pkg_name in packages:
-                    expanded.append(PackageSpec(name=pkg_name, version="latest"))
+                    # Fetch the actual latest version for each package
+                    try:
+                        from .sat import _package_path
+                        path = _package_path(pkg_name)
+                        # Try to get latest version metadata
+                        pkg_meta = fetch_repo_multi(repos, f"metadata/{path}/latest")
+                        actual_version = pkg_meta.get("version", "latest")
+                        expanded.append(PackageSpec(name=pkg_name, version=actual_version))
+                    except Exception:
+                        # Fallback to "latest" if we can't determine version
+                        expanded.append(PackageSpec(name=pkg_name, version="latest"))
                 print(f"  Found {len(packages)} package(s)")
             except Exception as e:
                 print(f"  Warning: could not fetch group {spec.name}: {e}")
