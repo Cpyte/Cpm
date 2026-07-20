@@ -85,6 +85,27 @@ def _extract(archive_path: Path, dest: Path) -> None:
     name = archive_path.name
     if name.endswith(".tar.gz") or name.endswith(".tgz"):
         with tarfile.open(archive_path, "r:gz") as tar:
+            # Check if archive contains a single root directory
+            members = tar.getmembers()
+            if len(members) > 0:
+                # Get all top-level paths
+                top_level = set()
+                for member in members:
+                    # Split the path and get the first component
+                    parts = member.name.split('/')
+                    if len(parts) > 0:
+                        top_level.add(parts[0])
+                # If there's only one top-level directory, extract its contents
+                if len(top_level) == 1:
+                    root_dir = top_level.pop()
+                    # Extract contents of the single directory
+                    for member in members:
+                        if member.name.startswith(root_dir + '/'):
+                            # Strip the root directory
+                            member.name = member.name[len(root_dir)+1:]
+                            if member.name:  # Skip empty names
+                                tar.extract(member, dest)
+                    return
             tar.extractall(dest)
     elif name.endswith(".tar.bz2"):
         with tarfile.open(archive_path, "r:bz2") as tar:
