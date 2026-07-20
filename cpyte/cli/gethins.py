@@ -58,25 +58,44 @@ def fetch_packages_list(repos: list[str]) -> list[dict]:
 
 
 def find_package_metadata(repos: list[str], package_name: str) -> dict:
-    """Find metadata for a specific package from the packages list.
+    """Find metadata for a specific package by trying the metadata endpoint first.
     
-    Since individual package metadata endpoints don't exist,
-    we construct minimal metadata from the packages list.
-    Note: The registry currently has package metadata but no downloadable files.
+    Tries to fetch actual metadata from the registry, falls back to packages list.
     """
+    # First, get the version from the packages list
     packages = fetch_packages_list(repos)
+    version = None
     for pkg in packages:
         if pkg.get("name") == package_name:
-            # Use the package page URL format from the web interface
-            pkg_url = f"{repos[0]}/package/{package_name}"
-            # Construct minimal metadata that resolve_get expects
-            return {
-                "name": pkg["name"],
-                "version": pkg.get("version", "latest"),
-                "url": pkg_url,  # Use the package page URL
-                "checksum": "",  # Not available in packages list
-                "claims": {},    # Not available in packages list
-                "requires": [],  # Not available in packages list
-                "no_download": True,  # Flag to indicate no downloadable file
-            }
-    return None
+            version = pkg.get("version", "latest")
+            break
+    
+    if not version:
+        return None
+    
+    # Try to fetch actual metadata for the specific version
+    if package_name.startswith("@"):
+        path = f"metadata/group/{package_name[1:]}/{version}"
+    else:
+        path = f"metadata/{package_name}/{version}"
+    
+    try:
+        return fetch_repo_multi(repos, path)
+    except Exception:
+        pass
+    
+    # Fallback: construct metadata from packages list
+    if package_name.startswith("@"):
+        download_url = f"{repos[0]}/packages/group/{package_name[1:]}/{version}.tar.gz"
+    else:
+        download_url = f"{repos[0]}/packages/{package_name}/{version}.tar.gz"
+    
+    return {
+        "name": package_name,
+        "version": version,
+        "url": download_url,
+        "checksum": "",
+        "claims": {},
+        "requires": [],
+        "no_download": True,
+    }

@@ -117,11 +117,13 @@ def _parse_package(pkg) -> tuple[str, str]:
 def _package_path(name: str) -> str:
     """Convert a package name to a URL path segment.
 
-    "@std/json"  → "@std/json"
-    "@a/b/c"     → "@a/b/c"
+    "@std/json"  → "group/std/json"
+    "@a/b/c"     → "group/a/b/c"
     "foo"        → "foo"
     """
-    # Keep the original format - the registry expects @scope/name directly
+    # Convert scoped packages to registry format: @scope/name -> group/scope/name
+    if name.startswith("@"):
+        return "group/" + name[1:]
     return name
 
 
@@ -211,12 +213,12 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
                 last_error = e
                 continue
         
-        # If regular metadata fetch fails, try to get minimal metadata from packages list
+        # If regular metadata fetch fails, try to get metadata from packages list
         if metadata is None:
             try:
                 metadata = find_package_metadata(repos, name)
                 if metadata:
-                    print(f"  Using minimal metadata from packages list for {name}")
+                    print(f"  Using metadata from packages list for {name}")
             except Exception as e:
                 last_error = e
         
