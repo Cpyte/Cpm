@@ -114,13 +114,11 @@ def _parse_package(pkg) -> tuple[str, str]:
 def _package_path(name: str) -> str:
     """Convert a package name to a URL path segment.
 
-    "@std/json"  → "group/std/json"
-    "@a/b/c"     → "group/a/b/c"
+    "@std/json"  → "@std/json"
+    "@a/b/c"     → "@a/b/c"
     "foo"        → "foo"
     """
-    if name.startswith("@"):
-        # @scope/name → group/scope/name
-        return "group/" + name[1:].replace("/", "/")
+    # Keep the original format - the registry expects @scope/name directly
     return name
 
 
@@ -248,14 +246,13 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
 def resolve_remove(packages: list, repos: list[str], resolving=None, resolved=None, target: Target = None, prebuilt: bool = False, llvm_version: str = None):
     """Resolve dependency tree into a flat instruction stream (REMOVE only).
 
-    Same pipeline as resolve_get but for removal operations.
+    For removal, we don't need metadata - just remove the packages by name.
+    Dependencies are handled by the lockfile, not by resolving from registry.
     """
     if resolving is None:
         resolving = set()
     if resolved is None:
         resolved = set()
-    if target is None:
-        target = Target.auto()
 
     instructions = []
 
@@ -270,56 +267,9 @@ def resolve_remove(packages: list, repos: list[str], resolving=None, resolved=No
 
         resolving.add(name)
 
-        path = _package_path(name)
-
-        # Fetch metadata — try different path formats for compatibility
-        if prebuilt:
-            paths_to_try = [
-                f"metadata/prebuilt/{path}/{version}",
-                f"metadata/{path}/{version}",  # fallback
-            ]
-        else:
-            paths_to_try = [
-                f"metadata/{path}/{version}",
-                f"metadata/{path}/latest",  # fallback to latest if version not found
-            ]
-        
-        metadata = None
-        last_error = None
-        for metadata_path in paths_to_try:
-            try:
-                metadata = fetch_repo_multi(repos, metadata_path)
-                break
-            except Exception as e:
-                last_error = e
-                continue
-        
-        if metadata is None:
-            raise last_error or RuntimeError(f"Could not fetch metadata for {name}@{version}")
-
-        # Check claims — skip packages that don't match target
-        claims = metadata.get("claims", {})
-        if not target.matches(claims):
-            resolving.remove(name)
-            resolved.add(name)
-            continue
-
-        # Check LLVM version compatibility for prebuilt packages
-        if prebuilt and llvm_version:
-            pkg_llvm = metadata.get("llvm_version", "")
-            if pkg_llvm and not _check_version_compat(pkg_llvm, llvm_version, "LLVM"):
-                resolving.remove(name)
-                resolved.add(name)
-                continue
-
-        requirements = metadata.get("requires", [])
-
-        if requirements:
-            instructions.append(
-                resolve_remove(requirements, repos, resolving, resolved, target, prebuilt, llvm_version)
-            )
-
-        instructions.append({"REMOVE": metadata["name"]})
+        # For removal, we don't need to fetch metadata
+        # Just create a REMOVE instruction for the package name
+        instructions.append({"REMOVE": name})
 
         resolving.remove(name)
         resolved.add(name)
