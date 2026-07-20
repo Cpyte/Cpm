@@ -33,25 +33,12 @@ def fetch_group(repos: list[str], group: str) -> list[str]:
     # Strip the @ for the metadata path
     group_id = group.lstrip("@")
     
-    # Try different metadata path formats for compatibility
-    paths_to_try = [
-        f"metadata/@{group_id}/latest",    # Standard format
-        f"metadata/{group_id}/latest",     # Alternative without @
-        f"group/{group_id}/latest",        # Group-based format
-    ]
+    # Use the standard format that works: metadata/@group_id/latest
+    path = f"metadata/@{group_id}/latest"
     
-    last_error = None
-    for path in paths_to_try:
-        try:
-            data = fetch_repo_multi(repos, path)
-            packages = data.get("packages", [])
-            if packages:
-                return packages
-        except Exception as e:
-            last_error = e
-            continue
-    
-    # If all paths fail, return empty list (group may not exist)
-    if last_error:
-        print(f"  Warning: could not fetch group {group}: {last_error}")
-    return []
+    try:
+        data = fetch_repo_multi(repos, path)
+        return data.get("packages", [])
+    except Exception as e:
+        print(f"  Warning: could not fetch group {group}: {e}")
+        return []
