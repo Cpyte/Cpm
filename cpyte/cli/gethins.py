@@ -42,3 +42,41 @@ def fetch_group(repos: list[str], group: str) -> list[str]:
     except Exception as e:
         print(f"  Warning: could not fetch group {group}: {e}")
         return []
+
+
+def fetch_packages_list(repos: list[str]) -> list[dict]:
+    """Fetch the complete list of packages from the registry.
+    
+    Returns a list of package dicts with 'name' and 'version' keys.
+    """
+    try:
+        data = fetch_repo_multi(repos, "packages")
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        print(f"  Warning: could not fetch packages list: {e}")
+        return []
+
+
+def find_package_metadata(repos: list[str], package_name: str) -> dict:
+    """Find metadata for a specific package from the packages list.
+    
+    Since individual package metadata endpoints don't exist,
+    we construct minimal metadata from the packages list.
+    Note: The registry currently has package metadata but no downloadable files.
+    """
+    packages = fetch_packages_list(repos)
+    for pkg in packages:
+        if pkg.get("name") == package_name:
+            # Use the package page URL format from the web interface
+            pkg_url = f"{repos[0]}/package/{package_name}"
+            # Construct minimal metadata that resolve_get expects
+            return {
+                "name": pkg["name"],
+                "version": pkg.get("version", "latest"),
+                "url": pkg_url,  # Use the package page URL
+                "checksum": "",  # Not available in packages list
+                "claims": {},    # Not available in packages list
+                "requires": [],  # Not available in packages list
+                "no_download": True,  # Flag to indicate no downloadable file
+            }
+    return None

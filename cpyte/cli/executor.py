@@ -147,6 +147,7 @@ def execute_get(inst: dict, project_root: Path, prebuilt: bool = False) -> None:
     url = inst.get("url")
     version = inst.get("version", "latest")
     checksum = inst.get("checksum")
+    no_download = inst.get("no_download", False)
 
     if not url:
         raise ValueError(f"No URL provided for package '{name}'")
@@ -156,6 +157,17 @@ def execute_get(inst: dict, project_root: Path, prebuilt: bool = False) -> None:
     # Already installed — skip
     if target.exists():
         print(f"  {name}@{version} already installed")
+        return
+
+    # If no downloadable file, create a placeholder
+    if no_download:
+        print(f"  {name}@{version} has no downloadable file (registry metadata only)")
+        print(f"  creating placeholder for {name}@{version}...")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.mkdir(parents=True, exist_ok=True)
+        # Create a placeholder file
+        (target / ".placeholder").write_text(f"Package {name}@{version} - registry metadata only, no downloadable file")
+        print(f"  {name}@{version} installed [placeholder]")
         return
 
     cache = _cache_path(name, version)

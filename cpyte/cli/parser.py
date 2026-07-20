@@ -19,7 +19,7 @@ try:
     from importlib.metadata import version
     CPM_VERSION = version("cpyte-cpm")
 except Exception:
-    CPM_VERSION = "1.1.7"
+    CPM_VERSION = "1.1.8"
 
 from cpyte.cli.commands import (
     AddCommand,

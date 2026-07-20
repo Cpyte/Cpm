@@ -4,6 +4,7 @@ import tempfile
 from packaging.version import Version
 from .gethins import fetch_repo as f
 from .gethins import fetch_repo_multi
+from .gethins import find_package_metadata
 import requests as rq
 
 from .manifest import Target
@@ -79,6 +80,8 @@ def _build_instruction(metadata: dict, prebuilt: bool = False) -> dict:
         inst["prebuilt"] = True
         inst["llvm_version"] = metadata.get("llvm_version", "")
         inst["cpyte_version"] = metadata.get("cpyte_version", "")
+    if metadata.get("no_download"):
+        inst["no_download"] = True
     return inst
 
 
@@ -207,6 +210,15 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
             except Exception as e:
                 last_error = e
                 continue
+        
+        # If regular metadata fetch fails, try to get minimal metadata from packages list
+        if metadata is None:
+            try:
+                metadata = find_package_metadata(repos, name)
+                if metadata:
+                    print(f"  Using minimal metadata from packages list for {name}")
+            except Exception as e:
+                last_error = e
         
         if metadata is None:
             raise last_error or RuntimeError(f"Could not fetch metadata for {name}@{version}")

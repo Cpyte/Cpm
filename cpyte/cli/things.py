@@ -30,6 +30,7 @@ from .lockfile import (
 from .gethins import fetch_repo
 from .gethins import fetch_repo_multi
 from .gethins import fetch_group
+from .gethins import find_package_metadata
 from cpyte.cli.commands import (
     InstallCommand,
     RemoveCommand,
@@ -101,9 +102,18 @@ def _expand_groups(specs: list[PackageSpec], repos: list[str]) -> list[PackageSp
             try:
                 packages = fetch_group(repos, spec.name)
                 for pkg_name in packages:
-                    # Use "latest" for all packages in the group
-                    # The actual version will be resolved during the dependency resolution phase
-                    expanded.append(PackageSpec(name=pkg_name, version="latest"))
+                    # Try to get the actual version from the packages list
+                    try:
+                        pkg_metadata = find_package_metadata(repos, pkg_name)
+                        if pkg_metadata:
+                            actual_version = pkg_metadata.get("version", "latest")
+                            expanded.append(PackageSpec(name=pkg_name, version=actual_version))
+                        else:
+                            # Fallback to "latest" if we can't find the package
+                            expanded.append(PackageSpec(name=pkg_name, version="latest"))
+                    except Exception:
+                        # Fallback to "latest" if we can't determine version
+                        expanded.append(PackageSpec(name=pkg_name, version="latest"))
                 print(f"  Found {len(packages)} package(s)")
             except Exception as e:
                 print(f"  Warning: could not fetch group {spec.name}: {e}")
