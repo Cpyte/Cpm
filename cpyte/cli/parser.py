@@ -23,8 +23,11 @@ from cpyte.cli.commands import (
     InitCommand,
     InstallCommand,
     ParsedCLI,
+    PublishCommand,
     RemoveCommand,
     RunCommand,
+    SearchCommand,
+    UnpublishCommand,
     UpdateCommand,
     VersionCommand,
 )
@@ -38,6 +41,9 @@ COMMANDS = [
     "update",
     "build",
     "run",
+    "publish",
+    "unpublish",
+    "search",
 ]
 
 
@@ -73,6 +79,8 @@ def _build_global_parser() -> argparse.ArgumentParser:
                         help="target platform (e.g., linux/x86_64, darwin/aarch64)")
     parser.add_argument("--llvm-version", default=None, metavar="VERSION",
                         help="LLVM version for prebuilt packages (e.g., 18.1.0)")
+    parser.add_argument("--server", action="append", default=[], metavar="URL",
+                        help="registry server URL (repeatable, highest priority first)")
     parser.add_argument("--version", action="store_true", default=False)
     parser.add_argument("-h", "--help", action="store_true", default=False)
     return parser
@@ -86,6 +94,7 @@ def _global_options_from_namespace(ns: argparse.Namespace) -> GlobalOptions:
         offline=ns.offline,
         no_cache=ns.no_cache,
         config=ns.config,
+        server=ns.server,
         target=ns.target,
         llvm_version=ns.llvm_version,
     )
@@ -119,6 +128,27 @@ def _build_command_parsers() -> dict[str, argparse.ArgumentParser]:
     parsers["run"].add_argument(
         "passthrough", nargs="*", metavar="ARG",
     )
+
+    parsers["publish"] = _cmd_parser("publish", "publish a package to the registry")
+    parsers["publish"].add_argument("directory", help="package directory to publish")
+    parsers["publish"].add_argument("--name", required=True, help="package name (e.g. @std/json)")
+    parsers["publish"].add_argument("--pkg-version", required=True, dest="pkg_version", help="package version")
+    parsers["publish"].add_argument("--requires", nargs="*", default=[], metavar="DEP", help="dependencies")
+    parsers["publish"].add_argument("--prebuilt", action="store_true", help="mark as prebuilt")
+    parsers["publish"].add_argument("--llvm-version", default="", help="LLVM version for prebuilt")
+    parsers["publish"].add_argument("--cpyte-version", default="", help="Cpyte version for prebuilt")
+    parsers["publish"].add_argument("--server", default="", help="registry server URL")
+    parsers["publish"].add_argument("--token", default="", help="auth token (email hash from web UI)")
+
+    parsers["unpublish"] = _cmd_parser("unpublish", "remove a package from the registry")
+    parsers["unpublish"].add_argument("name", help="package name (e.g. @std/json)")
+    parsers["unpublish"].add_argument("--pkg-version", default="", dest="pkg_version", help="package version to remove")
+    parsers["unpublish"].add_argument("--all", action="store_true", dest="all_versions", help="remove all versions")
+    parsers["unpublish"].add_argument("--block", action="store_true", help="block package from re-publish")
+    parsers["unpublish"].add_argument("--server", default="", help="registry server URL")
+
+    parsers["search"] = _cmd_parser("search", "search for packages")
+    parsers["search"].add_argument("query", help="search query")
 
     return parsers
 
@@ -154,6 +184,28 @@ def _build_command(name: str, ns: argparse.Namespace) -> Command:
         return BuildCommand()
     if name == "run":
         return RunCommand(script=ns.script, args=list(ns.passthrough))
+    if name == "publish":
+        return PublishCommand(
+            directory=ns.directory,
+            name=ns.name,
+            version=ns.pkg_version,
+            requires=list(ns.requires),
+            prebuilt=ns.prebuilt,
+            llvm_version=ns.llvm_version,
+            cpyte_version=ns.cpyte_version,
+            server=ns.server,
+            token=ns.token,
+        )
+    if name == "unpublish":
+        return UnpublishCommand(
+            name=ns.name,
+            version=ns.pkg_version,
+            all=ns.all_versions,
+            block=ns.block,
+            server=ns.server,
+        )
+    if name == "search":
+        return SearchCommand(query=ns.query)
     raise UnknownCommandError(name, _suggest_command(name))
 
 
@@ -183,6 +235,9 @@ def _print_top_level_help() -> None:
         "  update     update packages",
         "  build      build the project",
         "  run        run a script",
+        "  publish    publish a package to the registry",
+        "  unpublish  remove a package from the registry",
+        "  search     search for packages",
         "",
         "Global options:",
         "  -v, --verbose    enable verbose output",
@@ -193,6 +248,7 @@ def _print_top_level_help() -> None:
         "  --config PATH    path to configuration file",
         "  --target TARGET  target platform (e.g., linux/x86_64)",
         "  --llvm-version V LLVM version for prebuilt (e.g., 18.1.0)",
+        "  --server URL     registry server (repeatable, highest priority first)",
         "  --version        show version information",
         "  -h, --help       show this help message",
         "",

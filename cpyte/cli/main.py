@@ -34,6 +34,9 @@ def dispatch(parsed: ParsedCLI) -> None:
             update_deps,
             build_project,
             run_script,
+            publish_package,
+            unpublish_package,
+            search_packages,
         )
         from cpyte.cli.commands import (
             InitCommand,
@@ -43,6 +46,9 @@ def dispatch(parsed: ParsedCLI) -> None:
             UpdateCommand,
             BuildCommand,
             RunCommand,
+            PublishCommand,
+            UnpublishCommand,
+            SearchCommand,
         )
         register_handler(InitCommand, init_project)
         register_handler(AddCommand, add_deps)
@@ -51,6 +57,9 @@ def dispatch(parsed: ParsedCLI) -> None:
         register_handler(UpdateCommand, update_deps)
         register_handler(BuildCommand, build_project)
         register_handler(RunCommand, run_script)
+        register_handler(PublishCommand, publish_package)
+        register_handler(UnpublishCommand, unpublish_package)
+        register_handler(SearchCommand, search_packages)
 
     handler = _HANDLERS.get(type(parsed.command))
     if handler is None:

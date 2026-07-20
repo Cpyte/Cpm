@@ -50,9 +50,17 @@ class PackageSpec:
     def parse(cls, spec: str) -> PackageSpec:
         """Parse a package spec string like 'foo@^1.0' or '@std/json@1.0'."""
         if spec.startswith("@"):
+            # Group reference: @std (no slash) vs package: @std/json (has slash)
             match = re.match(r"^(@[^/]+/[^@]+)@(.+)$", spec)
             if match:
                 return cls(name=match.group(1), version=match.group(2))
+            # @std or @std@latest — could be group or scoped package
+            if "/" not in spec:
+                # Group reference: @std
+                match_ver = re.match(r"^(@[^/]+)@(.+)$", spec)
+                if match_ver:
+                    return cls(name=match_ver.group(1), version=match_ver.group(2))
+                return cls(name=spec, version="latest")
             return cls(name=spec, version="latest")
 
         if "@" in spec:
@@ -60,6 +68,11 @@ class PackageSpec:
             return cls(name=name, version=version)
 
         return cls(name=spec, version="latest")
+
+    @property
+    def is_group(self) -> bool:
+        """True if this is a group reference like @std (no slash)."""
+        return self.name.startswith("@") and "/" not in self.name
 
     def __str__(self) -> str:
         if self.version == "latest":
@@ -156,6 +169,7 @@ class Manifest:
     version: str = "0.1.0"
     prebuilt: bool = False
     llvm_version: str = ""
+    repos: list[str] = field(default_factory=list)
     packages: list[PackageSpec] = field(default_factory=list)
     target: Target = field(default_factory=Target)
     path: Optional[Path] = None
@@ -195,6 +209,8 @@ class Manifest:
         lines.append(f"prebuilt = {str(self.prebuilt).lower()}")
         if self.llvm_version:
             lines.append(f'llvm_version = "{self.llvm_version}"')
+        if self.repos:
+            lines.append(f"repos = {self.repos}")
         lines.append("")
 
         # Target section
@@ -293,6 +309,8 @@ def _parse_toml(content: str, manifest: Manifest) -> None:
                     manifest.prebuilt = value.strip().lower() == "true"
                 elif key == "llvm_version":
                     manifest.llvm_version = value.strip('"')
+                elif key == "repos":
+                    manifest.repos = _parse_list(value)
                 elif key == "packages":
                     # Legacy format: packages = ["foo", "bar"]
                     _parse_inline_packages(value, manifest)

@@ -3,6 +3,7 @@ import os
 import tempfile
 from packaging.version import Version
 from .gethins import fetch_repo as f
+from .gethins import fetch_repo_multi
 import requests as rq
 
 from .manifest import Target
@@ -142,7 +143,7 @@ def _check_version_compat(package_version: str, project_version: str, label: str
         return True
 
 
-def resolve_get(packages: list, repo: str, resolving=None, resolved=None, target: Target = None, prebuilt: bool = False, llvm_version: str = None):
+def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None, target: Target = None, prebuilt: bool = False, llvm_version: str = None):
     """Resolve dependency tree into a flat instruction stream (GET only).
 
     Pipeline stage: Resolve -> Lower -> Optimize -> Execute
@@ -155,8 +156,8 @@ def resolve_get(packages: list, repo: str, resolving=None, resolved=None, target
         List of package specs. Each can be:
             - "foo" or "foo@1.0" (string)
             - ("foo", "1.0") (tuple)
-    repo:
-        Repository URL base.
+    repos:
+        Repository URLs in priority order (highest first).
     target:
         Target platform claims for filtering. Packages whose claims
         don't match the target are skipped.
@@ -189,9 +190,9 @@ def resolve_get(packages: list, repo: str, resolving=None, resolved=None, target
 
         # Fetch metadata — prebuilt uses different path
         if prebuilt:
-            metadata = f(repo, f"metadata/prebuilt/{path}/{version}")
+            metadata = fetch_repo_multi(repos, f"metadata/prebuilt/{path}/{version}")
         else:
-            metadata = f(repo, f"metadata/{path}/{version}")
+            metadata = fetch_repo_multi(repos, f"metadata/{path}/{version}")
 
         # Check claims — skip packages that don't match target
         claims = metadata.get("claims", {})
@@ -214,7 +215,7 @@ def resolve_get(packages: list, repo: str, resolving=None, resolved=None, target
 
         if requirements:
             instructions.append(
-                resolve_get(requirements, repo, resolving, resolved, target, prebuilt, llvm_version)
+                resolve_get(requirements, repos, resolving, resolved, target, prebuilt, llvm_version)
             )
 
         instructions.append(_build_instruction(metadata, prebuilt))
@@ -225,7 +226,7 @@ def resolve_get(packages: list, repo: str, resolving=None, resolved=None, target
     return instructions
 
 
-def resolve_remove(packages: list, repo: str, resolving=None, resolved=None, target: Target = None, prebuilt: bool = False, llvm_version: str = None):
+def resolve_remove(packages: list, repos: list[str], resolving=None, resolved=None, target: Target = None, prebuilt: bool = False, llvm_version: str = None):
     """Resolve dependency tree into a flat instruction stream (REMOVE only).
 
     Same pipeline as resolve_get but for removal operations.
@@ -254,9 +255,9 @@ def resolve_remove(packages: list, repo: str, resolving=None, resolved=None, tar
 
         # Fetch metadata — prebuilt uses different path
         if prebuilt:
-            metadata = f(repo, f"metadata/prebuilt/{path}/{version}")
+            metadata = fetch_repo_multi(repos, f"metadata/prebuilt/{path}/{version}")
         else:
-            metadata = f(repo, f"metadata/{path}/{version}")
+            metadata = fetch_repo_multi(repos, f"metadata/{path}/{version}")
 
         # Check claims — skip packages that don't match target
         claims = metadata.get("claims", {})
@@ -277,7 +278,7 @@ def resolve_remove(packages: list, repo: str, resolving=None, resolved=None, tar
 
         if requirements:
             instructions.append(
-                resolve_remove(requirements, repo, resolving, resolved, target, prebuilt, llvm_version)
+                resolve_remove(requirements, repos, resolving, resolved, target, prebuilt, llvm_version)
             )
 
         instructions.append({"REMOVE": metadata["name"]})

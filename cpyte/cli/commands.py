@@ -14,6 +14,7 @@ class GlobalOptions:
     offline: bool = False
     no_cache: bool = False
     config: Optional[str] = None
+    server: List[str] = field(default_factory=list)
     target: Optional[str] = None
     llvm_version: Optional[str] = None
 
@@ -59,6 +60,33 @@ class VersionCommand:
     pass
 
 
+@dataclass(frozen=True)
+class PublishCommand:
+    directory: str = ""
+    name: str = ""
+    version: str = ""
+    requires: List[str] = field(default_factory=list)
+    prebuilt: bool = False
+    llvm_version: str = ""
+    cpyte_version: str = ""
+    server: str = ""
+    token: str = ""
+
+
+@dataclass(frozen=True)
+class UnpublishCommand:
+    name: str = ""
+    version: str = ""
+    all: bool = False
+    block: bool = False
+    server: str = ""
+
+
+@dataclass(frozen=True)
+class SearchCommand:
+    query: str = ""
+
+
 Command = Union[
     InitCommand,
     AddCommand,
@@ -68,6 +96,9 @@ Command = Union[
     BuildCommand,
     RunCommand,
     VersionCommand,
+    PublishCommand,
+    UnpublishCommand,
+    SearchCommand,
 ]
 
 
