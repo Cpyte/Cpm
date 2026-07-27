@@ -37,6 +37,12 @@ cpm install                     # install all from manifest
 | `cpm update <pkg>` | Re-resolve specific packages |
 | `cpm build` | Build the project |
 | `cpm run <script>` | Run a named script |
+| `cpm info <pkg>` | Show detailed package information |
+| `cpm list` | List installed packages |
+| `cpm validate` | Validate project manifest and lockfile |
+| `cpm search <query>` | Search for packages in registry |
+| `cpm publish` | Publish a package to the registry |
+| `cpm unpublish` | Remove a package from the registry |
 
 ## Global Flags
 
@@ -126,6 +132,147 @@ cpyte_version = "0.5.0"
 ├── cache/<name>/<version>/     # downloaded archives
 └── modules/<name>/<version>/   # extracted packages
 ```
+
+## Additional Commands
+
+### Package Information
+
+```bash
+cpm info @std/json          # Show package metadata and details
+```
+
+Displays:
+- Package version and URL
+- Platform claims (OS, architecture, features)
+- Dependencies
+- Installation status
+
+### List Installed Packages
+
+```bash
+cpm list                    # List all installed packages in current project
+```
+
+Shows installed packages with versions from the lockfile, with status indicators.
+
+### Validate Project
+
+```bash
+cpm validate                # Validate manifest and lockfile
+```
+
+Checks:
+- Manifest TOML syntax
+- Required fields (name, version)
+- Dependency declarations
+- Lockfile presence and consistency
+- Target platform configuration
+
+### Search Packages
+
+```bash
+cpm search json             # Search for packages matching a query
+```
+
+Searches both local installed packages and remote registry.
+
+## Extension Packages
+
+CPM supports extension packages that extend the Cpyte compiler with custom syntax, keywords, operators, and compiler hooks. Extension packages use a `package.json` manifest to declare their capabilities.
+
+### Extension Package Structure
+
+```
+.cpm/modules/
+├── package_name/
+│   └── version/
+│       ├── package.json         # Extension manifest
+│       ├── parser_hooks.py      # Custom syntax parsing
+│       ├── semantic_hooks.py    # Type checking extensions
+│       ├── codegen_hooks.py     # LLVM IR generation
+│       ├── runtime_hooks.py     # Runtime code injection
+│       ├── *.cpy                # Main entry point (optional)
+│       └── *.ll                 # Prebuilt LLVM IR (optional)
+```
+
+### package.json Format
+
+```json
+{
+  "name": "package_name",
+  "version": "1.0.0",
+  "capabilities": {
+    "keywords": ["async", "await", "defer"],
+    "operators": ["~~"],
+    "tags": ["@async", "@callback"],
+    "macros": ["async_def"],
+    "custom_types": ["Promise", "Future"]
+  },
+  "extensions": {
+    "parser_hooks": ["parser_hooks.py"],
+    "semantic_hooks": ["semantic_hooks.py"],
+    "codegen_hooks": ["codegen_hooks.py"],
+    "runtime_hooks": ["runtime_hooks.py"]
+  },
+  "dependencies": [],
+  "metadata": {
+    "description": "Package description",
+    "author": "Author name",
+    "license": "MIT"
+  }
+}
+```
+
+### Extension Capabilities
+
+- **Keywords**: Custom language keywords that extend the lexer
+- **Operators**: Custom operators for expressions
+- **Tags**: Custom tags for annotations and metadata
+- **Macros**: Compile-time macro definitions
+- **Custom Types**: New type definitions
+
+### Extension Hooks
+
+- **Parser Hooks**: Extend the parser with custom syntax rules
+- **Semantic Hooks**: Add custom type checking and analysis rules
+- **Codegen Hooks**: Extend LLVM IR generation
+- **Runtime Hooks**: Inject runtime code and libraries
+
+### Extension-Only Packages
+
+Packages can provide only extensions without any `.cpy` or `.ll` files. These packages:
+- Provide keywords, operators, and compiler hooks
+- Can be imported successfully by the compiler
+- Are useful for language feature extensions
+
+### Viewing Extension Capabilities
+
+```bash
+cpm info package_name      # Shows extension capabilities if available
+```
+
+The `cpm info` command displays extension capabilities for installed packages:
+
+```
+Extension Capabilities:
+  Keywords: async, await, defer
+  Operators: ~~
+  Tags: @async, @callback
+  Custom Types: Promise, Future
+  Extension Hooks:
+    Parser: parser_hooks.py
+    Semantic: semantic_hooks.py
+    Codegen: codegen_hooks.py
+    Runtime: runtime_hooks.py
+```
+
+### Package Discovery
+
+Extension packages are discovered automatically by the Cpyte compiler:
+- Pre-loaded before compilation from `.cpm/modules/`
+- Keywords registered during lexing
+- Hooks loaded during appropriate compilation phases
+- No CPM configuration required
 
 ## License
 

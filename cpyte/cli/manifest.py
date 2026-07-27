@@ -31,13 +31,46 @@ Legacy format (also supported):
 
 from __future__ import annotations
 
+import json
 import platform
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 
 MANIFEST_NAME = "cpytoml"
+PACKAGE_JSON_NAME = "package.json"
+
+
+@dataclass
+class ExtensionCapabilities:
+    """Extension capabilities from package.json."""
+    keywords: set[str] = field(default_factory=set)
+    operators: set[str] = field(default_factory=set)
+    tags: set[str] = field(default_factory=set)
+    macros: set[str] = field(default_factory=set)
+    custom_types: set[str] = field(default_factory=set)
+
+
+@dataclass
+class ExtensionHooks:
+    """Extension hook files from package.json."""
+    parser_hooks: list[str] = field(default_factory=list)
+    semantic_hooks: list[str] = field(default_factory=list)
+    codegen_hooks: list[str] = field(default_factory=list)
+    runtime_hooks: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PackageJson:
+    """Package manifest from package.json for extension packages."""
+    name: str
+    version: str
+    capabilities: ExtensionCapabilities = field(default_factory=ExtensionCapabilities)
+    extensions: ExtensionHooks = field(default_factory=ExtensionHooks)
+    dependencies: list[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    path: Optional[Path] = None
 
 
 @dataclass
@@ -361,3 +394,54 @@ def _parse_list(value: str) -> list[str]:
         for item in inner.split(",")
         if item.strip()
     ]
+
+
+def find_package_json(package_dir: Path) -> Optional[Path]:
+    """Find package.json in a package directory."""
+    package_json = package_dir / PACKAGE_JSON_NAME
+    if package_json.exists():
+        return package_json
+    return None
+
+
+def read_package_json(package_dir: Path) -> Optional[PackageJson]:
+    """Read package.json from a package directory."""
+    package_json_path = find_package_json(package_dir)
+    if not package_json_path:
+        return None
+    
+    try:
+        with open(package_json_path, 'r') as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"Warning: Failed to read package.json: {e}")
+        return None
+    
+    # Parse capabilities
+    capabilities_data = data.get('capabilities', {})
+    capabilities = ExtensionCapabilities(
+        keywords=set(capabilities_data.get('keywords', [])),
+        operators=set(capabilities_data.get('operators', [])),
+        tags=set(capabilities_data.get('tags', [])),
+        macros=set(capabilities_data.get('macros', [])),
+        custom_types=set(capabilities_data.get('custom_types', []))
+    )
+    
+    # Parse extensions
+    extensions_data = data.get('extensions', {})
+    extensions = ExtensionHooks(
+        parser_hooks=extensions_data.get('parser_hooks', []),
+        semantic_hooks=extensions_data.get('semantic_hooks', []),
+        codegen_hooks=extensions_data.get('codegen_hooks', []),
+        runtime_hooks=extensions_data.get('runtime_hooks', [])
+    )
+    
+    return PackageJson(
+        name=data.get('name', ''),
+        version=data.get('version', ''),
+        capabilities=capabilities,
+        extensions=extensions,
+        dependencies=data.get('dependencies', []),
+        metadata=data.get('metadata', {}),
+        path=package_json_path
+    )

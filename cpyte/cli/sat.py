@@ -5,29 +5,10 @@ from packaging.version import Version
 from .gethins import fetch_repo as f
 from .gethins import fetch_repo_multi
 from .gethins import find_package_metadata
+from . import style
 import requests as rq
 
 from .manifest import Target
-
-
-class PackageKey:
-    """Unique identity for a package: name@version."""
-    __slots__ = ("name", "version")
-
-    def __init__(self, name: str, version: str):
-        self.name = name
-        self.version = version
-
-    def __eq__(self, other):
-        if not isinstance(other, PackageKey):
-            return NotImplemented
-        return self.name == other.name and self.version == other.version
-
-    def __hash__(self):
-        return hash((self.name, self.version))
-
-    def __repr__(self):
-        return f"{self.name}@{self.version}"
 
 
 def calculate_checksum(file_path: str, algorithm: str = "sha256") -> str:
@@ -37,31 +18,6 @@ def calculate_checksum(file_path: str, algorithm: str = "sha256") -> str:
         for chunk in iter(lambda: fp.read(4096), b""):
             hash_func.update(chunk)
     return f"{algorithm}:{hash_func.hexdigest()}"
-
-
-def download_and_verify(url: str, expected_checksum: str, version: float | int, algorithm: str = "sha256") -> str:
-    """Download a file and verify its checksum."""
-    response = rq.get(url, stream=True)
-    response.raise_for_status()
-
-    suffix = os.path.basename(url)
-    with tempfile.NamedTemporaryFile(
-        prefix=f"{version}_",
-        suffix=f"_{suffix}",
-        delete=False,
-    ) as tmp:
-        for chunk in response.iter_content(chunk_size=8192):
-            tmp.write(chunk)
-        temp_path = tmp.name
-
-    actual_checksum = calculate_checksum(temp_path, algorithm)
-
-    if actual_checksum != expected_checksum:
-        os.remove(temp_path)
-        raise ValueError(f"Checksum mismatch: expected {expected_checksum}, got {actual_checksum}")
-
-    print(f"Checksum verified: {actual_checksum}")
-    return temp_path
 
 
 def _build_instruction(metadata: dict, prebuilt: bool = False) -> dict:
@@ -218,7 +174,7 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
             try:
                 metadata = find_package_metadata(repos, name)
                 if metadata:
-                    print(f"  Using metadata from packages list for {name}")
+                    style.print_verbose(f"  Using metadata from packages list for {name}")
             except Exception as e:
                 last_error = e
         
@@ -228,7 +184,7 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
         # Check claims — skip packages that don't match target
         claims = metadata.get("claims", {})
         if not target.matches(claims):
-            print(f"  skipping {name}@{version} (claims don't match target)")
+            style.print_skipped(name, version, "claims don't match target")
             resolving.remove(name)
             resolved.add(name)
             continue
@@ -237,7 +193,7 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
         if prebuilt and llvm_version:
             pkg_llvm = metadata.get("llvm_version", "")
             if pkg_llvm and not _check_version_compat(pkg_llvm, llvm_version, "LLVM"):
-                print(f"  skipping {name}@{version} (LLVM {pkg_llvm} != {llvm_version})")
+                style.print_skipped(name, version, f"LLVM {pkg_llvm} != {llvm_version}")
                 resolving.remove(name)
                 resolved.add(name)
                 continue
@@ -295,7 +251,9 @@ def deduplicator(tree: list[dict]) -> list[dict]:
     """Flatten and deduplicate a dependency tree into an instruction stream.
 
     Pipeline stage: Optimize
-    Traverses nested tree, deduplicates by package name, returns flat list.
+    Traverses nested tree, deduplicates by name@version (not just name),
+    returns flat list. Different versions of the same package are NOT
+    duplicates and will both be kept.
     """
     seen: set[str] = set()
     result: list[dict] = []
@@ -303,9 +261,12 @@ def deduplicator(tree: list[dict]) -> list[dict]:
     def traverse(node):
         if isinstance(node, dict):
             for key, value in node.items():
-                if key == "GET" and value not in seen:
-                    seen.add(value)
-                    result.append(node)
+                if key == "GET":
+                    version = node.get("version", "latest")
+                    identity = f"{value}@{version}"
+                    if identity not in seen:
+                        seen.add(identity)
+                        result.append(node)
                 elif key == "REMOVE" and value not in seen:
                     seen.add(value)
                     result.append(node)

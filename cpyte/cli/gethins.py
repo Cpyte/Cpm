@@ -1,11 +1,14 @@
 import requests as rq
+from . import style
+from .http_session import get_session
 
 
 def fetch_repo(url: str, back: str):
     """Fetch metadata from a single repo."""
     cleaned = url.strip("/")
     based = "/".join([cleaned, back])
-    repo = rq.get(based)
+    session = get_session()
+    repo = session.get(based, timeout=10)
     repo.raise_for_status()
     return repo.json()
 
@@ -40,7 +43,7 @@ def fetch_group(repos: list[str], group: str) -> list[str]:
         data = fetch_repo_multi(repos, path)
         return data.get("packages", [])
     except Exception as e:
-        print(f"  Warning: could not fetch group {group}: {e}")
+        style.print_warning(f"could not fetch group {group}: {e}")
         return []
 
 
@@ -53,7 +56,7 @@ def fetch_packages_list(repos: list[str]) -> list[dict]:
         data = fetch_repo_multi(repos, "packages")
         return data if isinstance(data, list) else []
     except Exception as e:
-        print(f"  Warning: could not fetch packages list: {e}")
+        style.print_warning(f"could not fetch packages list: {e}")
         return []
 
 

@@ -10,6 +10,7 @@ from cpyte.cli.commands import (
 )
 from cpyte.cli.errors import CLIError
 from cpyte.cli.parser import parse_args
+from cpyte.cli import style
 
 Handler = Callable[[GlobalOptions, Command], None]
 
@@ -31,35 +32,47 @@ def dispatch(parsed: ParsedCLI) -> None:
             add_deps,
             remove_deps,
             install_deps,
+            install_local_deps,
             update_deps,
             build_project,
             run_script,
             publish_package,
             unpublish_package,
             search_packages,
+            show_package_info,
+            list_installed_packages,
+            validate_manifest,
         )
         from cpyte.cli.commands import (
             InitCommand,
             AddCommand,
             RemoveCommand,
             InstallCommand,
+            LocalInstallCommand,
             UpdateCommand,
             BuildCommand,
             RunCommand,
             PublishCommand,
             UnpublishCommand,
             SearchCommand,
+            InfoCommand,
+            ListCommand,
+            ValidateCommand,
         )
         register_handler(InitCommand, init_project)
         register_handler(AddCommand, add_deps)
         register_handler(RemoveCommand, remove_deps)
         register_handler(InstallCommand, install_deps)
+        register_handler(LocalInstallCommand, install_local_deps)
         register_handler(UpdateCommand, update_deps)
         register_handler(BuildCommand, build_project)
         register_handler(RunCommand, run_script)
         register_handler(PublishCommand, publish_package)
         register_handler(UnpublishCommand, unpublish_package)
         register_handler(SearchCommand, search_packages)
+        register_handler(InfoCommand, show_package_info)
+        register_handler(ListCommand, list_installed_packages)
+        register_handler(ValidateCommand, validate_manifest)
 
     handler = _HANDLERS.get(type(parsed.command))
     if handler is None:
@@ -68,17 +81,35 @@ def dispatch(parsed: ParsedCLI) -> None:
 
 
 def main(argv: Optional[List[str]] = None) -> None:
+    from .http_session import close_session
     try:
         parsed = parse_args(argv)
     except CLIError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        style.print_error(str(exc))
         sys.exit(1)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        style.print_error(f"unexpected error: {exc}")
+        sys.exit(1)
+
+    # Initialize style module based on global options
+    style.set_quiet(parsed.global_options.quiet)
+    style.set_json_mode(parsed.global_options.json)
 
     try:
         dispatch(parsed)
     except CLIError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        style.print_error(str(exc))
         sys.exit(1)
+    except SystemExit:
+        raise
     except Exception as exc:
-        print(f"unexpected error: {exc}", file=sys.stderr)
+        if parsed.global_options.verbose:
+            import traceback
+            traceback.print_exc()
+        else:
+            style.print_error(f"unexpected error: {exc}")
         sys.exit(1)
+    finally:
+        close_session()

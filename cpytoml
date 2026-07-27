@@ -3,4 +3,5 @@ version = "0.1.0"
 prebuilt = false
 
 [cpm.dependencies]
-# no dependencies
+"@std/strbuilder" = "0.1.0"
+"@std/json" = "1.0"

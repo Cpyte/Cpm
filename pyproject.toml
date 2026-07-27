@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cpyte-cpm"
-version = "1.2.0"
-description = "A package manager for cpy"
+version = "1.4.0"
+description = "A package manager for cpy with extension support"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -41,5 +41,6 @@ default = true
 
 [[tool.uv.index]]
 name = "safety"
-url = "https://pkgs.safetycli.com/repository/teamparadox/project/wew-package-manager/pypi/simple/"
+url = "https://pkgs.safetycli.com/repository/teamparadox/project/wew-package_manager/pypi/simple/"
+publish-url = "https://pkgs.safetycli.com/repository/teamparadox/project/wew-package_manager/pypi/"
 default = false

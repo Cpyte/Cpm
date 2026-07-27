@@ -25,6 +25,8 @@ from pathlib import Path
 import requests as rq
 
 from .gethins import fetch_repo
+from . import style
+from .http_session import get_session
 
 
 CPM_HOME = Path.home() / ".cpm"
@@ -70,13 +72,16 @@ def _verify_checksum(file_path: str, expected: str) -> None:
         )
 
 
-def _download(url: str, dest: Path) -> None:
-    """Download a file from url to dest."""
-    response = rq.get(url, stream=True, timeout=30)
+def _download(url: str, dest: Path) -> int:
+    """Download a file from url to dest. Returns file size in bytes."""
+    session = get_session()
+    response = session.get(url, stream=True, timeout=30)
     response.raise_for_status()
+    size = int(response.headers.get("content-length", 0))
     with open(dest, "wb") as fp:
         for chunk in response.iter_content(chunk_size=8192):
             fp.write(chunk)
+    return size
 
 
 def _extract(archive_path: Path, dest: Path) -> None:
@@ -152,7 +157,8 @@ def _install_from_cache(project_root: Path, name: str, version: str) -> None:
             return
 
 
-def execute_get(inst: dict, project_root: Path, prebuilt: bool = False) -> None:
+def execute_get(inst: dict, project_root: Path, prebuilt: bool = False,
+                force: bool = False, no_cache: bool = False) -> None:
     """Execute a single GET instruction.
 
     Parameters
@@ -163,6 +169,10 @@ def execute_get(inst: dict, project_root: Path, prebuilt: bool = False) -> None:
         Project root directory (where .cpm/modules/ lives).
     prebuilt:
         If True, fetch prebuilt .ll from registry.
+    force:
+        If True, reinstall even if already installed.
+    no_cache:
+        If True, skip cache and re-download.
     """
     name = inst["GET"]
     url = inst.get("url")
@@ -175,45 +185,44 @@ def execute_get(inst: dict, project_root: Path, prebuilt: bool = False) -> None:
 
     target = _module_path(project_root, name, version)
 
-    # Already installed — skip
-    if target.exists():
-        print(f"  {name}@{version} already installed")
+    # Already installed — skip (unless force)
+    if target.exists() and not force:
+        style.print_already_installed(name, version)
         return
 
     # If no downloadable file, create a placeholder
     if no_download:
-        print(f"  {name}@{version} has no downloadable file (registry metadata only)")
-        print(f"  creating placeholder for {name}@{version}...")
+        style.print_verbose(f"  {name}@{version} has no downloadable file (registry metadata only)")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.mkdir(parents=True, exist_ok=True)
         # Create a placeholder file
         (target / ".placeholder").write_text(f"Package {name}@{version} - registry metadata only, no downloadable file")
-        print(f"  {name}@{version} installed [placeholder]")
+        style.print_installed(name, version, "placeholder")
         return
 
     cache = _cache_path(name, version)
 
-    # Check cache
-    if checksum and _is_cached(name, version, checksum):
-        print(f"  {name}@{version} found in cache, installing...")
+    # Check cache (unless no_cache is set)
+    if not no_cache and checksum and _is_cached(name, version, checksum):
+        style.print_verbose(f"  {name}@{version} found in cache, installing...")
         _install_from_cache(project_root, name, version)
-        print(f"  {name}@{version} installed")
+        style.print_installed(name, version, "source", cached=True)
         return
 
     # Download
-    print(f"  downloading {name}@{version}...")
     cache.mkdir(parents=True, exist_ok=True)
     filename = url.rsplit("/", 1)[-1] or f"{name}-{version}.tar.gz"
     dest = cache / filename
-    _download(url, dest)
+    style.print_download(name, version)
+    size = _download(url, dest)
 
     # Verify checksum
     if checksum:
-        print(f"  verifying checksum...")
+        style.print_verbose("  verifying checksum...")
         _verify_checksum(str(dest), checksum)
 
     # Extract to cache first
-    print(f"  installing {name}@{version}...")
+    style.print_verbose(f"  extracting {name}@{version}...")
     _extract(dest, cache)
 
     # Install from cache to project
@@ -221,7 +230,7 @@ def execute_get(inst: dict, project_root: Path, prebuilt: bool = False) -> None:
     shutil.copytree(cache, target)
 
     mode = "prebuilt" if prebuilt else "source"
-    print(f"  {name}@{version} installed [{mode}]")
+    style.print_installed(name, version, mode)
 
 
 def execute_remove(inst: dict, project_root: Path) -> None:
@@ -230,11 +239,11 @@ def execute_remove(inst: dict, project_root: Path) -> None:
     target = project_root / ".cpm" / "modules" / name
 
     if not target.exists():
-        print(f"  {name} not installed, skipping")
+        style.print_warning(f"{name} not installed, skipping")
         return
 
     shutil.rmtree(target)
-    print(f"  {name} removed")
+    style.print_removed(name)
 
 
 def execute(
@@ -243,6 +252,8 @@ def execute(
     repo: str = None,
     ver: str = "latest",
     prebuilt: bool = False,
+    force: bool = False,
+    no_cache: bool = False,
 ) -> None:
     """Execute a flat instruction stream.
 
@@ -264,12 +275,16 @@ def execute(
         Package version to resolve against.
     prebuilt:
         If True, registry serves prebuilt artifacts (.ll).
+    force:
+        If True, reinstall even if already installed.
+    no_cache:
+        If True, skip cache and re-download.
     """
     _ensure_cache_dir()
 
     total = len(instructions)
     mode = "prebuilt" if prebuilt else "source"
-    print(f"\nExecuting {total} instruction(s) [{mode}]...\n")
+    style.print_header(f"Executing {total} instruction(s) [{mode}]")
 
     for i, inst in enumerate(instructions, 1):
         # If metadata is missing from instruction, fetch it
@@ -285,12 +300,12 @@ def execute(
             inst["version"] = metadata.get("version", ver)
 
         if "GET" in inst:
-            print(f"[{i}/{total}] GET {inst['GET']}")
-            execute_get(inst, project_root, prebuilt=prebuilt)
+            style.print_step(i, total, f"GET {inst['GET']}")
+            execute_get(inst, project_root, prebuilt=prebuilt, force=force, no_cache=no_cache)
         elif "REMOVE" in inst:
-            print(f"[{i}/{total}] REMOVE {inst['REMOVE']}")
+            style.print_step(i, total, f"REMOVE {inst['REMOVE']}")
             execute_remove(inst, project_root)
         else:
-            print(f"[{i}/{total}] SKIP unknown instruction: {inst}")
+            style.print_step(i, total, f"SKIP unknown instruction: {inst}")
 
-    print(f"\nDone. {total} instruction(s) executed.")
+    style.print_success(f"\nDone. {total} instruction(s) executed.")

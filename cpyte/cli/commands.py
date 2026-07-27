@@ -10,6 +10,7 @@ from typing import List, Optional, Union
 class GlobalOptions:
     verbose: bool = False
     quiet: bool = False
+    json: bool = False
     yes: bool = False
     offline: bool = False
     no_cache: bool = False
@@ -27,6 +28,7 @@ class InitCommand:
 @dataclass(frozen=True)
 class AddCommand:
     packages: List[str] = field(default_factory=list)
+    force: bool = False
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,13 @@ class RemoveCommand:
 @dataclass(frozen=True)
 class InstallCommand:
     packages: List[str] = field(default_factory=list)
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class LocalInstallCommand:
+    path: str = ""
+    force: bool = False
 
 
 @dataclass(frozen=True)
@@ -87,11 +96,27 @@ class SearchCommand:
     query: str = ""
 
 
+@dataclass(frozen=True)
+class InfoCommand:
+    package: str = ""
+
+
+@dataclass(frozen=True)
+class ListCommand:
+    pass
+
+
+@dataclass(frozen=True)
+class ValidateCommand:
+    pass
+
+
 Command = Union[
     InitCommand,
     AddCommand,
     RemoveCommand,
     InstallCommand,
+    LocalInstallCommand,
     UpdateCommand,
     BuildCommand,
     RunCommand,
@@ -99,6 +124,9 @@ Command = Union[
     PublishCommand,
     UnpublishCommand,
     SearchCommand,
+    InfoCommand,
+    ListCommand,
+    ValidateCommand,
 ]
 
 

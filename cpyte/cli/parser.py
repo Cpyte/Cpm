@@ -19,7 +19,7 @@ try:
     from importlib.metadata import version
     CPM_VERSION = version("cpyte-cpm")
 except Exception:
-    CPM_VERSION = "1.1.8"
+    CPM_VERSION = "1.4.0"
 
 from cpyte.cli.commands import (
     AddCommand,
@@ -28,6 +28,7 @@ from cpyte.cli.commands import (
     GlobalOptions,
     InitCommand,
     InstallCommand,
+    LocalInstallCommand,
     ParsedCLI,
     PublishCommand,
     RemoveCommand,
@@ -36,6 +37,9 @@ from cpyte.cli.commands import (
     UnpublishCommand,
     UpdateCommand,
     VersionCommand,
+    InfoCommand,
+    ListCommand,
+    ValidateCommand,
 )
 from cpyte.cli.errors import CLIError, UnknownCommandError
 
@@ -44,12 +48,16 @@ COMMANDS = [
     "add",
     "remove",
     "install",
+    "install-local",
     "update",
     "build",
     "run",
     "publish",
     "unpublish",
     "search",
+    "info",
+    "list",
+    "validate",
 ]
 
 
@@ -77,6 +85,7 @@ def _build_global_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-v", "--verbose", action="store_true", default=False)
     parser.add_argument("-q", "--quiet", action="store_true", default=False)
+    parser.add_argument("--json", action="store_true", default=False, dest="json_output")
     parser.add_argument("-y", "--yes", action="store_true", default=False)
     parser.add_argument("--offline", action="store_true", default=False)
     parser.add_argument("--no-cache", action="store_true", default=False)
@@ -96,6 +105,7 @@ def _global_options_from_namespace(ns: argparse.Namespace) -> GlobalOptions:
     return GlobalOptions(
         verbose=ns.verbose,
         quiet=ns.quiet,
+        json=ns.json_output,
         yes=ns.yes,
         offline=ns.offline,
         no_cache=ns.no_cache,
@@ -117,12 +127,18 @@ def _build_command_parsers() -> dict[str, argparse.ArgumentParser]:
     parsers["init"] = _cmd_parser("init", "initialize a new project")
     parsers["add"] = _cmd_parser("add", "add packages")
     parsers["add"].add_argument("packages", nargs="+", metavar="PACKAGE")
+    parsers["add"].add_argument("--force", action="store_true", help="force reinstall even if installed")
 
     parsers["remove"] = _cmd_parser("remove", "remove packages")
     parsers["remove"].add_argument("packages", nargs="+", metavar="PACKAGE")
 
     parsers["install"] = _cmd_parser("install", "install dependencies")
     parsers["install"].add_argument("packages", nargs="*", metavar="PACKAGE")
+    parsers["install"].add_argument("--force", action="store_true", help="force reinstall even if installed")
+
+    parsers["install-local"] = _cmd_parser("install-local", "install package from local directory")
+    parsers["install-local"].add_argument("path", help="path to local package directory")
+    parsers["install-local"].add_argument("--force", action="store_true", help="force reinstall even if installed")
 
     parsers["update"] = _cmd_parser("update", "update packages")
     parsers["update"].add_argument("packages", nargs="*", metavar="PACKAGE")
@@ -156,6 +172,13 @@ def _build_command_parsers() -> dict[str, argparse.ArgumentParser]:
     parsers["search"] = _cmd_parser("search", "search for packages")
     parsers["search"].add_argument("query", help="search query")
 
+    parsers["info"] = _cmd_parser("info", "show package information")
+    parsers["info"].add_argument("package", help="package name (e.g. @std/json)")
+
+    parsers["list"] = _cmd_parser("list", "list installed packages")
+
+    parsers["validate"] = _cmd_parser("validate", "validate project manifest")
+
     return parsers
 
 
@@ -179,11 +202,13 @@ def _build_command(name: str, ns: argparse.Namespace) -> Command:
     if name == "init":
         return InitCommand()
     if name == "add":
-        return AddCommand(packages=list(ns.packages))
+        return AddCommand(packages=list(ns.packages), force=getattr(ns, 'force', False))
     if name == "remove":
         return RemoveCommand(packages=list(ns.packages))
     if name == "install":
-        return InstallCommand(packages=list(ns.packages))
+        return InstallCommand(packages=list(ns.packages), force=getattr(ns, 'force', False))
+    if name == "install-local":
+        return LocalInstallCommand(path=ns.path, force=getattr(ns, 'force', False))
     if name == "update":
         return UpdateCommand(packages=list(ns.packages))
     if name == "build":
@@ -212,6 +237,12 @@ def _build_command(name: str, ns: argparse.Namespace) -> Command:
         )
     if name == "search":
         return SearchCommand(query=ns.query)
+    if name == "info":
+        return InfoCommand(package=ns.package)
+    if name == "list":
+        return ListCommand()
+    if name == "validate":
+        return ValidateCommand()
     raise UnknownCommandError(name, _suggest_command(name))
 
 
@@ -234,23 +265,28 @@ def _print_top_level_help() -> None:
         "Usage: cpm [global options] <command> [command options]",
         "",
         "Commands:",
-        "  init       initialize a new project",
-        "  add        add packages",
-        "  remove     remove packages",
-        "  install    install dependencies",
-        "  update     update packages",
-        "  build      build the project",
-        "  run        run a script",
-        "  publish    publish a package to the registry",
-        "  unpublish  remove a package from the registry",
-        "  search     search for packages",
+        "  init           initialize a new project",
+        "  add            add packages to the project",
+        "  remove         remove packages from the project",
+        "  install        install dependencies from manifest",
+        "  install-local  install package from local directory",
+        "  update         update packages to latest versions",
+        "  build          build the project",
+        "  run            run a script",
+        "  publish        publish a package to the registry",
+        "  unpublish      remove a package from the registry",
+        "  search         search for packages",
+        "  info           show package information",
+        "  list           list installed packages",
+        "  validate       validate project manifest",
         "",
         "Global options:",
         "  -v, --verbose    enable verbose output",
-        "  -q, --quiet      suppress output",
+        "  -q, --quiet      suppress output (errors still shown)",
+        "  --json           output in JSON format (for scripts)",
         "  -y, --yes        automatically confirm prompts",
         "  --offline        run in offline mode",
-        "  --no-cache       disable cache",
+        "  --no-cache       disable cache (re-download all)",
         "  --config PATH    path to configuration file",
         "  --target TARGET  target platform (e.g., linux/x86_64)",
         "  --llvm-version V LLVM version for prebuilt (e.g., 18.1.0)",

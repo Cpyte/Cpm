@@ -43,27 +43,40 @@ class Lockfile:
     path: Optional[Path] = None
 
     def get(self, name: str) -> Optional[LockEntry]:
-        """Get a locked entry by package name."""
+        """Get a locked entry by package name (returns first match)."""
         for entry in self.entries:
             if entry.name == name:
                 return entry
         return None
 
+    def get_version(self, name: str, version: str) -> Optional[LockEntry]:
+        """Get a locked entry by name and exact version."""
+        for entry in self.entries:
+            if entry.name == name and entry.version == version:
+                return entry
+        return None
+
+    def get_all(self, name: str) -> list[LockEntry]:
+        """Get all locked entries for a package name."""
+        return [e for e in self.entries if e.name == name]
+
     def add(self, entry: LockEntry) -> None:
-        """Add or update a locked entry."""
+        """Add or update a locked entry (matches by name AND version)."""
         for i, existing in enumerate(self.entries):
-            if existing.name == entry.name:
+            if existing.name == entry.name and existing.version == entry.version:
                 self.entries[i] = entry
                 return
         self.entries.append(entry)
 
-    def remove(self, name: str) -> bool:
-        """Remove a locked entry by name. Returns True if removed."""
-        for i, entry in enumerate(self.entries):
-            if entry.name == name:
+    def remove(self, name: str, version: str = None) -> bool:
+        """Remove locked entries. If version is None, removes all entries for the name."""
+        removed = False
+        for i in range(len(self.entries) - 1, -1, -1):
+            entry = self.entries[i]
+            if entry.name == name and (version is None or entry.version == version):
                 self.entries.pop(i)
-                return True
-        return False
+                removed = True
+        return removed
 
     def toml_str(self) -> str:
         """Serialize lockfile to TOML string."""
