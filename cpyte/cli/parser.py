@@ -19,7 +19,7 @@ try:
     from importlib.metadata import version
     CPM_VERSION = version("cpyte-cpm")
 except Exception:
-    CPM_VERSION = "1.4.0"
+    CPM_VERSION = "1.4.1"
 
 from cpyte.cli.commands import (
     AddCommand,
@@ -347,9 +347,6 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> ParsedCLI:
 
     # No command provided (only global flags were given)
     if not remaining:
-        if known.help:
-            _print_top_level_help()
-            raise SystemExit(0)
         return ParsedCLI(global_options=global_options, command=None)
 
     # Pass 2: first remaining token is the command
@@ -360,7 +357,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> ParsedCLI:
     if command_name not in COMMAND_PARSERS:
         raise UnknownCommandError(command_name, _suggest_command(command_name))
 
-    # Handle --help for a specific command
+    # Handle --help consumed by global parser (e.g. `cpm install --help`)
+    if known.help:
+        _print_command_help(command_name)
+        raise SystemExit(0)
+
+    # Handle --help after the command (e.g. `cpm install --help` with nargs="*")
     if "-h" in command_args or "--help" in command_args:
         _print_command_help(command_name)
         raise SystemExit(0)

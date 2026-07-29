@@ -56,6 +56,41 @@ from cpyte.cli.commands import (
 DEFAULT_REPO = "https://cypackage.5gnew.io.vn"
 
 
+def _is_local_path(spec: str) -> bool:
+    """Check if a package spec is a local filesystem path."""
+    if not spec:
+        return False
+    # Absolute paths
+    if spec.startswith("/"):
+        return True
+    # Home directory
+    if spec.startswith("~"):
+        return True
+    # Relative paths (./ or ../)
+    if spec.startswith("./") or spec.startswith("../"):
+        return True
+    # Check if it's an existing directory
+    p = Path(spec)
+    if p.exists() and p.is_dir():
+        return True
+    return False
+
+
+def _route_local_packages(packages: list[str]) -> tuple[list[str], list[str]]:
+    """Split packages into registry packages and local paths.
+    
+    Returns (registry_specs, local_paths).
+    """
+    registry = []
+    local = []
+    for pkg in packages:
+        if _is_local_path(pkg):
+            local.append(pkg)
+        else:
+            registry.append(pkg)
+    return registry, local
+
+
 def _get_repos(global_opt: GlobalOptions, manifest: Manifest = None) -> list[str]:
     """Build repository URL list in priority order.
 
@@ -174,7 +209,7 @@ def _lock_from_instruction(inst: dict, deps: list[str] | None = None) -> LockEnt
 def init_project(global_opt: GlobalOptions, command: InitCommand):
     """Initialize a new CPM project.
 
-    Creates cpytoml in the current directory.
+    Creates cpytoml in the current directory with a full template.
     """
     manifest_path = Path.cwd() / "cpytoml"
 
@@ -183,8 +218,32 @@ def init_project(global_opt: GlobalOptions, command: InitCommand):
         return
 
     project_name = Path.cwd().name
-    manifest = Manifest(name=project_name, version="0.1.0", path=manifest_path)
+    manifest = Manifest(
+        name=project_name,
+        version="0.1.0",
+        path=manifest_path,
+    )
     write_manifest(manifest)
+
+    # Append informative comments to the generated file
+    with open(manifest_path, "a") as f:
+        f.write("""
+# [cpm.dependencies]
+# "@std/json" = "^1.0"
+# "@std/http" = "1.0"
+
+# [cpm.target]
+# os = "linux"
+# arch = "x86_64"
+# features = ["gui", "ssl"]
+
+# [cpm.dependencies.windows]
+# "win32-api" = "1.0"
+
+# [cpm.dependencies.linux]
+# "posix-api" = "1.0"
+""")
+
     style.print_success(f"Initialized CPM project: {project_name}")
     style.print_info(f"Created {manifest_path}")
 
@@ -209,7 +268,18 @@ def add_deps(global_opt: GlobalOptions, command: AddCommand):
         style.print_error("No packages specified")
         return
 
-    specs = [PackageSpec.parse(p) for p in packages]
+    # Route local paths
+    registry_pkgs, local_paths = _route_local_packages(packages)
+    
+    # Handle local packages first
+    for path in local_paths:
+        install_local_deps(global_opt, LocalInstallCommand(path=path, force=command.force))
+
+    # Handle registry packages
+    if not registry_pkgs:
+        return
+
+    specs = [PackageSpec.parse(p) for p in registry_pkgs]
     specs = _expand_groups(specs, repos)
     manifest = read_manifest()
 
@@ -316,8 +386,18 @@ def install_deps(global_opt: GlobalOptions, command: InstallCommand):
     packages = command.packages
 
     if packages:
-        # Specific packages
-        specs = [PackageSpec.parse(p) for p in packages]
+        # Route local paths
+        registry_pkgs, local_paths = _route_local_packages(packages)
+
+        # Handle local packages first
+        for path in local_paths:
+            install_local_deps(global_opt, LocalInstallCommand(path=path, force=command.force))
+
+        if not registry_pkgs:
+            return
+
+        # Specific packages from registry
+        specs = [PackageSpec.parse(p) for p in registry_pkgs]
         specs = _expand_groups(specs, repos)
         pkg_tuples = [(s.name, s.version) for s in specs]
 
