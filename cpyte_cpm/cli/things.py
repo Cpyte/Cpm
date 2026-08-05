@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 from . import style
+from .. import compiler as cpyte_toolchain
 from .sat import resolve_get, resolve_remove, deduplicator, _package_path
 from .executor import execute, _ensure_cache_dir, _module_path
 from .manifest import (
@@ -35,7 +36,7 @@ from .gethins import fetch_repo
 from .gethins import fetch_repo_multi
 from .gethins import fetch_group
 from .gethins import find_package_metadata
-from cpyte.cli.commands import (
+from cpyte_cpm.cli.commands import (
     InstallCommand,
     LocalInstallCommand,
     RemoveCommand,
@@ -44,6 +45,8 @@ from cpyte.cli.commands import (
     InitCommand,
     BuildCommand,
     RunCommand,
+    ExecCommand,
+    DoctorCommand,
     PublishCommand,
     UnpublishCommand,
     SearchCommand,
@@ -202,6 +205,13 @@ def _lock_from_instruction(inst: dict, deps: list[str] | None = None) -> LockEnt
     )
 
 
+def _compiler_pin(prebuilt: bool) -> str:
+    """Return the detected Cpyte compiler version for prebuilt installs."""
+    if not prebuilt:
+        return ""
+    return cpyte_toolchain.get_cpyte_version()
+
+
 # ---------------------------------------------------------------------------
 # cpm init
 # ---------------------------------------------------------------------------
@@ -242,6 +252,9 @@ def init_project(global_opt: GlobalOptions, command: InitCommand):
 
 # [cpm.dependencies.linux]
 # "posix-api" = "1.0"
+
+# Set scorpion = true to also pre-compile a .sef (Scorpion RISC-V) artifact
+# on every build:  scorpion = true
 """)
 
     style.print_success(f"Initialized CPM project: {project_name}")
@@ -311,7 +324,7 @@ def add_deps(global_opt: GlobalOptions, command: AddCommand):
         pkg_tuples = [(s.name, s.version) for s in to_install]
         target = _get_target(manifest)
         llvm_version = global_opt.llvm_version or manifest.llvm_version
-        tree = resolve_get(pkg_tuples, repos, target=target, prebuilt=manifest.prebuilt, llvm_version=llvm_version)
+        tree = resolve_get(pkg_tuples, repos, target=target, prebuilt=manifest.prebuilt, llvm_version=llvm_version, cpyte_version=_compiler_pin(manifest.prebuilt))
         instructions = deduplicator(tree)
 
         if global_opt.verbose:
@@ -405,7 +418,7 @@ def install_deps(global_opt: GlobalOptions, command: InstallCommand):
         manifest = read_manifest()
         target = _get_target(manifest)
         llvm_version = global_opt.llvm_version or manifest.llvm_version
-        tree = resolve_get(pkg_tuples, repos, target=target, prebuilt=manifest.prebuilt, llvm_version=llvm_version)
+        tree = resolve_get(pkg_tuples, repos, target=target, prebuilt=manifest.prebuilt, llvm_version=llvm_version, cpyte_version=_compiler_pin(manifest.prebuilt))
         instructions = deduplicator(tree)
 
         if global_opt.verbose:
@@ -445,7 +458,7 @@ def install_deps(global_opt: GlobalOptions, command: InstallCommand):
         style.print_header(f"Installing {len(to_install)} package(s) from manifest")
         target = _get_target(manifest)
         llvm_version = global_opt.llvm_version or manifest.llvm_version
-        tree = resolve_get(to_install, repos, target=target, prebuilt=manifest.prebuilt, llvm_version=llvm_version)
+        tree = resolve_get(to_install, repos, target=target, prebuilt=manifest.prebuilt, llvm_version=llvm_version, cpyte_version=_compiler_pin(manifest.prebuilt))
         instructions = deduplicator(tree)
 
         if global_opt.verbose:
@@ -664,8 +677,7 @@ def update_deps(global_opt: GlobalOptions, command: UpdateCommand):
 def build_project(global_opt: GlobalOptions, command: BuildCommand):
     """Build the project.
 
-    Looks for build configuration in cpytoml [cpm.build] section.
-    Falls back to running 'cpy build' if no custom build is defined.
+    Prefers the Cpyte compiler. Falls back to build.py for custom builds.
     """
     manifest = read_manifest()
     if not manifest.path:
@@ -674,8 +686,21 @@ def build_project(global_opt: GlobalOptions, command: BuildCommand):
 
     project_dir = manifest.path.parent
 
-    # Check for custom build script in manifest
-    # For now, look for a build.py or build script in the project
+    # Toolchain check first — building is meaningless without the compiler
+    toolchain = cpyte_toolchain.detect_compiler()
+    if not toolchain.available:
+        style.print_error("Cpyte compiler not detected.")
+        if toolchain.binary_error:
+            style.print_warning(f"  {toolchain.binary_error}")
+        style.print_info("  Install the compiler: pip install cpyte  (or run 'cpm doctor')")
+        return
+
+    style.print_info(
+        f"  Using {style.Color.BOLD_CYAN}cpyte {toolchain.version}{style.Color.RESET}"
+        f"{f' (LLVM {toolchain.llvm_version})' if toolchain.llvm_version else ''}"
+    )
+
+    # Custom build script wins
     build_script = project_dir / "build.py"
     if build_script.exists():
         style.print_info(f"Running {build_script}...")
@@ -686,23 +711,51 @@ def build_project(global_opt: GlobalOptions, command: BuildCommand):
         if result.returncode != 0:
             style.print_error(f"Build failed with exit code {result.returncode}")
             sys.exit(result.returncode)
+        style.print_success("Build complete")
         return
 
-    # Try cpy compiler
-    cpy_bin = shutil.which("cpy")
-    if cpy_bin:
-        style.print_info("Running cpy build...")
-        result = subprocess.run(
-            [cpy_bin, "build"],
-            cwd=str(project_dir),
-        )
-        if result.returncode != 0:
-            style.print_error(f"Build failed with exit code {result.returncode}")
-            sys.exit(result.returncode)
+    # Find the project entry point
+    entry = _find_project_entry(project_dir, manifest.name)
+    if entry is None:
+        style.print_warning("No entry point found (looked for main.cpy, <project>.cpy, src/main.cpy).")
+        style.print_info("Add a [cpm.build] section to cpytoml or create a build.py script.")
         return
 
-    style.print_warning("No build system found.")
-    style.print_info("Add a [cpm.build] section to cpytoml or create a build.py script.")
+    style.print_header(f"Building {entry.name}")
+    result = cpyte_toolchain.run_compiler(["build", str(entry)], cwd=project_dir)
+    if result.returncode != 0:
+        style.print_error(f"Build failed with exit code {result.returncode}")
+        sys.exit(result.returncode)
+    style.print_success("Build complete")
+
+    # Scorpion-ready projects also pre-compile a .sef artifact
+    if manifest.scorpion:
+        style.print_header(f"Scorpion (RISC-V) build for {entry.name}")
+        with style.Spinner("cross-compiling to SEF"):
+            sef_rc, sef_path = cpyte_toolchain.emit_scorpion(entry, cwd=project_dir)
+        if sef_rc != 0:
+            style.print_error(f"Scorpion build failed with exit code {sef_rc}")
+            style.print_warning("Install the RISC-V toolchain (riscv*-elf-gcc) to cross-compile.")
+            sys.exit(sef_rc)
+        if sef_path.exists():
+            style.print_success(f"Wrote {sef_path.name}")
+        else:
+            style.print_error(f"Expected SEF at {sef_path} but it was not produced")
+            sys.exit(1)
+
+
+def _find_project_entry(project_dir: Path, project_name: str) -> Path | None:
+    """Locate the project's main .cpy entry point."""
+    candidates = [
+        project_dir / "main.cpy",
+        project_dir / f"{project_name}.cpy",
+        project_dir / "src" / "main.cpy",
+        project_dir / "src" / f"{project_name}.cpy",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -712,7 +765,10 @@ def build_project(global_opt: GlobalOptions, command: BuildCommand):
 def run_script(global_opt: GlobalOptions, command: RunCommand):
     """Run a script defined in the project.
 
-    Looks for scripts in cpytoml [cpm.scripts] section.
+    Resolution order:
+        1. <script>.py — plain Python helper
+        2. <script>.cpy — Cpyte source (compiled via the Cpyte compiler JIT)
+        3. .cpm/modules/**/<script>.py / <script>.cpy
     """
     script_name = command.script
     args = command.args
@@ -724,7 +780,7 @@ def run_script(global_opt: GlobalOptions, command: RunCommand):
 
     project_dir = manifest.path.parent
 
-    # Look for the script as a file first
+    # Look for the script as a Python file first
     script_file = project_dir / f"{script_name}.py"
     if script_file.exists():
         style.print_info(f"Running {script_file.name}...")
@@ -736,26 +792,110 @@ def run_script(global_opt: GlobalOptions, command: RunCommand):
             sys.exit(result.returncode)
         return
 
-    # Look for script in project .cpm/modules paths
+    # Then as a Cpyte source file
+    cpy_file = project_dir / f"{script_name}.cpy"
+    if cpy_file.exists():
+        _run_cpy_file(cpy_file, args)
+        return
+
+    # Look for scripts in project .cpm/modules paths
     cpm_modules = project_dir / ".cpm" / "modules"
     if cpm_modules.exists():
         for module_dir in cpm_modules.iterdir():
             if module_dir.is_dir():
                 for version_dir in module_dir.iterdir():
                     if version_dir.is_dir():
-                        candidate = version_dir / f"{script_name}.py"
-                        if candidate.exists():
-                            style.print_info(f"Running {candidate}...")
-                            result = subprocess.run(
-                                [sys.executable, str(candidate)] + args,
-                                cwd=str(project_dir),
-                            )
-                            if result.returncode != 0:
-                                sys.exit(result.returncode)
-                            return
+                        for ext in (".py", ".cpy"):
+                            candidate = version_dir / f"{script_name}{ext}"
+                            if candidate.exists():
+                                if ext == ".py":
+                                    style.print_info(f"Running {candidate}...")
+                                    result = subprocess.run(
+                                        [sys.executable, str(candidate)] + args,
+                                        cwd=str(project_dir),
+                                    )
+                                    if result.returncode != 0:
+                                        sys.exit(result.returncode)
+                                    return
+                                _run_cpy_file(candidate, args)
+                                return
 
     style.print_error(f"Script '{script_name}' not found.")
     style.print_info(f"Looked for: {script_file}")
+
+
+# ---------------------------------------------------------------------------
+# cpm exec
+# ---------------------------------------------------------------------------
+
+def exec_cpy(global_opt: GlobalOptions, command: ExecCommand):
+    """Execute a .cpy file with the Cpyte compiler."""
+    source = Path(command.file).resolve()
+    if not source.exists():
+        style.print_error(f"File not found: {source}")
+        return
+    if source.suffix != ".cpy":
+        style.print_warning(f"'{source.name}' is not a .cpy file")
+
+    toolchain = cpyte_toolchain.detect_compiler()
+    if not toolchain.available:
+        style.print_error("Cpyte compiler not detected. Run 'cpm doctor' for details.")
+        return
+
+    style.print_info(
+        f"  Executing {style.Color.BOLD_CYAN}{source.name}{style.Color.RESET} "
+        f"with cpyte {toolchain.version}"
+    )
+    _run_cpy_file(source, command.args)
+
+
+def _run_cpy_file(source: Path, args: list[str]) -> None:
+    """Run a .cpy file through the Cpyte compiler JIT."""
+    code = cpyte_toolchain.run_cpy(source, args)
+    if code != 0:
+        style.print_error(f"Execution failed with exit code {code}")
+        sys.exit(code)
+
+
+# ---------------------------------------------------------------------------
+# cpm doctor
+# ---------------------------------------------------------------------------
+
+def doctor_project(global_opt: GlobalOptions, command: DoctorCommand):
+    """Diagnose the Cpyte toolchain and the current project."""
+    style.banner(title="Toolchain Diagnostics")
+
+    report = cpyte_toolchain.diagnose()
+    compiler = report["compiler"]
+
+    style.box("Cpyte Compiler", [
+        f"  detected   : {style.Color.GREEN}yes{style.Color.RESET}" if compiler["detected"]
+        else f"  detected   : {style.Color.RED}no{style.Color.RESET}",
+        f"  version    : {style.Color.BOLD}{compiler['version'] or '-'}{style.Color.RESET}",
+        f"  binary     : {compiler['binary'] or '-'}",
+        f"  module     : {compiler['module_path'] or '-'}",
+        f"  llvm       : {report['llvm_version'] or '-'}",
+    ])
+
+    if not compiler["detected"]:
+        if compiler["module_error"]:
+            style.print_warning(f"  python import failed: {compiler['module_error']}")
+        if compiler["binary_error"]:
+            style.print_warning(f"  {compiler['binary_error']}")
+        style.print_info("  Install: pip install cpyte")
+
+    ws = report["workspace"]
+    style.box("Project", [
+        f"  name       : {ws['project'] or '-'}",
+        f"  manifest   : {ws['manifest'] or '-'}",
+        f"  .cpm dir   : {style.Color.GREEN}present{style.Color.RESET}" if ws["cpm_dir"]
+        else f"  .cpm dir   : {style.Color.DIM}absent (run 'cpm install'){style.Color.RESET}",
+    ])
+
+    if compiler["detected"]:
+        style.print_success("Toolchain looks good")
+    else:
+        style.print_error("Toolchain is incomplete — install the Cpyte compiler")
 
 
 # ---------------------------------------------------------------------------
@@ -785,6 +925,28 @@ def publish_package(global_opt: GlobalOptions, command: PublishCommand):
         style.print_error(f"directory not found: {package_dir}")
         return
 
+    # Validate the package manifest with the Cpyte compiler's own validator
+    with style.Spinner("validating package.json"):
+        ok, errors = cpyte_toolchain.validate_package_json(package_dir)
+    if not ok:
+        style.print_error(f"package.json failed validation for {command.name}:")
+        for err in errors:
+            style.print_error(f"  - {err}")
+        return
+    style.print_success("package.json is valid")
+
+    # Auto-pin the compiler version for prebuilt artifacts
+    cpyte_version = command.cpyte_version or cpyte_toolchain.get_cpyte_version()
+
+    # Scorpion-ready packages: record the flag and expect a pre-compiled .sef
+    pkg_json = read_package_json(package_dir)
+    scorpion_ready = bool(pkg_json and pkg_json.metadata.get("scorpion"))
+    if scorpion_ready:
+        style.print_success("package.json declares scorpion = true")
+        sef_files = list(package_dir.glob("*.sef"))
+        if not sef_files:
+            style.print_warning("No .sef artifact found — run 'cpm build' with scorpion enabled first.")
+
     # Compute the URL path for the package
     if command.name.startswith("@"):
         name_path = "group/" + command.name[1:]
@@ -802,8 +964,10 @@ def publish_package(global_opt: GlobalOptions, command: PublishCommand):
     }
     if command.prebuilt:
         meta["prebuilt"] = True
-        meta["llvm_version"] = command.llvm_version
-        meta["cpyte_version"] = command.cpyte_version
+        meta["llvm_version"] = command.llvm_version or cpyte_toolchain._llvm_version()
+        meta["cpyte_version"] = cpyte_version
+    if scorpion_ready:
+        meta["scorpion"] = True
 
     if global_opt.verbose:
         style.print_verbose(f"Publishing {command.name}@{command.version} to {server}")

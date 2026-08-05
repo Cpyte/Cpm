@@ -11,7 +11,7 @@ Lockfile format:
     checksum = "sha256:abc123..."
     dependencies = ["@std/encoding@1.2.0"]
     llvm_version = "18.1.0"
-    cpyte_version = "0.5.0"
+    cpyte_version = "2.6.0"
 """
 
 from __future__ import annotations

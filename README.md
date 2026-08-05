@@ -35,13 +35,15 @@ cpm install                     # install all from manifest
 | `cpm install <pkg>` | Install specific packages |
 | `cpm update` | Re-resolve and update all packages |
 | `cpm update <pkg>` | Re-resolve specific packages |
-| `cpm build` | Build the project |
-| `cpm run <script>` | Run a named script |
+| `cpm build` | Build the project (via the Cpyte compiler) |
+| `cpm run <script>` | Run a named script (Python or `.cpy`) |
+| `cpm exec <file.cpy>` | Execute a `.cpy` file with the Cpyte compiler JIT |
+| `cpm doctor` | Diagnose the Cpyte compiler toolchain + project |
 | `cpm info <pkg>` | Show detailed package information |
 | `cpm list` | List installed packages |
 | `cpm validate` | Validate project manifest and lockfile |
 | `cpm search <query>` | Search for packages in registry |
-| `cpm publish` | Publish a package to the registry |
+| `cpm publish` | Publish a package to the registry (validated against the compiler's manifest rules) |
 | `cpm unpublish` | Remove a package from the registry |
 
 ## Global Flags
@@ -122,8 +124,63 @@ resolved = "https://repo.example.com/group/std/json/2.0.3.tar.gz"
 checksum = "sha256:abc123..."
 dependencies = ["@std/encoding@1.2.0"]
 llvm_version = "18.1.0"
-cpyte_version = "0.5.0"
+cpyte_version = "2.6.0"
 ```
+
+Prebuilt packages are also filtered by the Cpyte compiler version: a prebuilt
+artifact whose `cpyte_version` differs in major version from the detected
+compiler is skipped during resolution.
+
+## Toolchain Integration
+
+CPM is a *compiler-pipeline* package manager: it feeds the Cpyte compiler.
+
+- `cpm build` compiles your project through the Cpyte compiler toolchain
+  (`cpy` binary, falling back to `python -m cpyte`) rather than an internal
+  build script.
+- `cpm exec <file.cpy>` JIT-runs any `.cpy` file through the compiler.
+- `cpm run <script>` resolves `<script>.cpy` scripts through the compiler JIT
+  before falling back to plain Python.
+- `cpm publish` validates `package.json` with the compiler's own
+  `ManifestParser` / `ManifestValidator` before uploading, and auto-pins the
+  detected compiler version for prebuilt artifacts.
+- Prebuilt dependency resolution checks the compiler version (major must match).
+- `cpm doctor` reports the detected compiler, module path, LLVM version, and
+  project state in a single panel.
+- Installed extension packages are auto-discovered by the compiler from
+  `.cpm/modules/`, including scoped packages like `@std/json`.
+
+### `cpm doctor`
+
+```
+┌─ Toolchain Diagnostics ──────────────┐
+│  detected   : yes                    │
+│  version    : 2.6.0                  │
+│  binary     : /…/.venv/bin/cpy       │
+│  module     : /…/site-packages/cpyte │
+│  llvm       : 18.1.8                 │
+└──────────────────────────────────────┘
+┌─ Project ────────────────────────────┐
+│  name       : my-app                 │
+│  manifest   : /…/cpytoml             │
+│  .cpm dir   : present                │
+└──────────────────────────────────────┘
+✓ Toolchain looks good
+```
+
+## Terminal Effects
+
+CPM ships a pure-ANSI effect layer (`cpyte_cpm.cli.style`) with TTY detection
+and `NO_COLOR` / `FORCE_COLOR` support:
+
+- **Gradient banner** (`cpm` with no command) — ASCII-art logo in a blue→green gradient
+- **Pipeline diagram** — `Resolve ▸ Lower ▸ Optimize ▸ Execute`
+- **Animated spinner** — threaded `◐ ◓ ◑ ◒` animation for long operations
+- **Inline progress bar** — `████████░░░░░ 5/10 installing`
+- **Box panels** — bordered diagnostic panels (`cpm doctor`)
+- **Gradient text, rainbow, pulse** effects plus the full status glyph set (✓ ✗ ⚠ ▸ ●)
+
+All effects disable automatically on non-TTY output, `--quiet`, or `NO_COLOR`.
 
 ## Directory Layout
 
@@ -184,15 +241,19 @@ CPM supports extension packages that extend the Cpyte compiler with custom synta
 
 ```
 .cpm/modules/
-├── package_name/
+├── package_name/                    # unscoped packages
 │   └── version/
-│       ├── package.json         # Extension manifest
-│       ├── parser_hooks.py      # Custom syntax parsing
-│       ├── semantic_hooks.py    # Type checking extensions
-│       ├── codegen_hooks.py     # LLVM IR generation
-│       ├── runtime_hooks.py     # Runtime code injection
-│       ├── *.cpy                # Main entry point (optional)
-│       └── *.ll                 # Prebuilt LLVM IR (optional)
+│       ├── package.json             # Extension manifest
+│       ├── parser_hooks.py          # Custom syntax parsing
+│       ├── semantic_hooks.py        # Type checking extensions
+│       ├── codegen_hooks.py         # LLVM IR generation
+│       ├── runtime_hooks.py         # Runtime code injection
+│       ├── *.cpy                    # Main entry point (optional)
+│       └── *.ll                     # Prebuilt LLVM IR (optional)
+└── @scope/                          # scoped packages (e.g. @std)
+    └── name/                        # e.g. json
+        └── version/
+            └── package.json
 ```
 
 ### package.json Format

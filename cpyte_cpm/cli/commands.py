@@ -65,6 +65,17 @@ class RunCommand:
 
 
 @dataclass(frozen=True)
+class ExecCommand:
+    file: str = ""
+    args: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DoctorCommand:
+    pass
+
+
+@dataclass(frozen=True)
 class VersionCommand:
     pass
 
@@ -120,6 +131,8 @@ Command = Union[
     UpdateCommand,
     BuildCommand,
     RunCommand,
+    ExecCommand,
+    DoctorCommand,
     VersionCommand,
     PublishCommand,
     UnpublishCommand,

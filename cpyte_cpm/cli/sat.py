@@ -102,7 +102,7 @@ def _check_version_compat(package_version: str, project_version: str, label: str
         return True
 
 
-def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None, target: Target = None, prebuilt: bool = False, llvm_version: str = None):
+def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None, target: Target = None, prebuilt: bool = False, llvm_version: str = None, cpyte_version: str = None):
     """Resolve dependency tree into a flat instruction stream (GET only).
 
     Pipeline stage: Resolve -> Lower -> Optimize -> Execute
@@ -124,6 +124,8 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
         If True, fetch prebuilt metadata from registry.
     llvm_version:
         Required LLVM version for prebuilt packages.
+    cpyte_version:
+        Required Cpyte compiler version for prebuilt packages.
     """
     if resolving is None:
         resolving = set()
@@ -198,11 +200,20 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
                 resolved.add(name)
                 continue
 
+        # Check Cpyte compiler version compatibility for prebuilt packages
+        if prebuilt and cpyte_version:
+            pkg_cpyte = metadata.get("cpyte_version", "")
+            if pkg_cpyte and not _check_version_compat(pkg_cpyte, cpyte_version, "cpyte"):
+                style.print_skipped(name, version, f"cpyte {pkg_cpyte} != {cpyte_version}")
+                resolving.remove(name)
+                resolved.add(name)
+                continue
+
         requirements = metadata.get("requires", [])
 
         if requirements:
             instructions.append(
-                resolve_get(requirements, repos, resolving, resolved, target, prebuilt, llvm_version)
+                resolve_get(requirements, repos, resolving, resolved, target, prebuilt, llvm_version, cpyte_version)
             )
 
         instructions.append(_build_instruction(metadata, prebuilt))

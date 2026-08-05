@@ -201,6 +201,7 @@ class Manifest:
     name: str = ""
     version: str = "0.1.0"
     prebuilt: bool = False
+    scorpion: bool = False
     llvm_version: str = ""
     repos: list[str] = field(default_factory=list)
     packages: list[PackageSpec] = field(default_factory=list)
@@ -240,6 +241,7 @@ class Manifest:
             lines.append(f'name = "{self.name}"')
         lines.append(f'version = "{self.version}"')
         lines.append(f"prebuilt = {str(self.prebuilt).lower()}")
+        lines.append(f"scorpion = {str(self.scorpion).lower()}")
         if self.llvm_version:
             lines.append(f'llvm_version = "{self.llvm_version}"')
         if self.repos:
@@ -340,6 +342,8 @@ def _parse_toml(content: str, manifest: Manifest) -> None:
                     manifest.version = value.strip('"')
                 elif key == "prebuilt":
                     manifest.prebuilt = value.strip().lower() == "true"
+                elif key == "scorpion":
+                    manifest.scorpion = value.strip().lower() == "true"
                 elif key == "llvm_version":
                     manifest.llvm_version = value.strip('"')
                 elif key == "repos":

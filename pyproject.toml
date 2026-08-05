@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cpyte-cpm"
-version = "1.4.1"
+version = "1.5.0"
 description = "A package manager for cpy with extension support"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,6 +18,9 @@ dependencies = [
     "packaging",
 ]
 
+[tool.setuptools.packages.find]
+include = ["cpyte_cpm*"]
+
 [project.optional-dependencies]
 dev = ["pytest>=9.1.1"]
 
@@ -25,7 +28,7 @@ dev = ["pytest>=9.1.1"]
 Homepage = "https://gitea.5gnew.io.vn/Cpyte-Project/Cpyte"
 
 [project.scripts]
-cpm = "cpyte.cli.main:main"
+cpm = "cpyte_cpm.cli.main:main"
 
 [dependency-groups]
 dev = [

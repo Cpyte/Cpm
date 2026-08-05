@@ -3,14 +3,14 @@ from __future__ import annotations
 import sys
 from typing import Callable, Dict, List, Optional
 
-from cpyte.cli.commands import (
+from cpyte_cpm.cli.commands import (
     Command,
     GlobalOptions,
     ParsedCLI,
 )
-from cpyte.cli.errors import CLIError
-from cpyte.cli.parser import parse_args
-from cpyte.cli import style
+from cpyte_cpm.cli.errors import CLIError
+from cpyte_cpm.cli.parser import parse_args
+from cpyte_cpm.cli import style
 
 Handler = Callable[[GlobalOptions, Command], None]
 
@@ -36,6 +36,8 @@ def dispatch(parsed: ParsedCLI) -> None:
             update_deps,
             build_project,
             run_script,
+            exec_cpy,
+            doctor_project,
             publish_package,
             unpublish_package,
             search_packages,
@@ -43,7 +45,7 @@ def dispatch(parsed: ParsedCLI) -> None:
             list_installed_packages,
             validate_manifest,
         )
-        from cpyte.cli.commands import (
+        from cpyte_cpm.cli.commands import (
             InitCommand,
             AddCommand,
             RemoveCommand,
@@ -52,6 +54,8 @@ def dispatch(parsed: ParsedCLI) -> None:
             UpdateCommand,
             BuildCommand,
             RunCommand,
+            ExecCommand,
+            DoctorCommand,
             PublishCommand,
             UnpublishCommand,
             SearchCommand,
@@ -67,6 +71,8 @@ def dispatch(parsed: ParsedCLI) -> None:
         register_handler(UpdateCommand, update_deps)
         register_handler(BuildCommand, build_project)
         register_handler(RunCommand, run_script)
+        register_handler(ExecCommand, exec_cpy)
+        register_handler(DoctorCommand, doctor_project)
         register_handler(PublishCommand, publish_package)
         register_handler(UnpublishCommand, unpublish_package)
         register_handler(SearchCommand, search_packages)
@@ -96,6 +102,11 @@ def main(argv: Optional[List[str]] = None) -> None:
     # Initialize style module based on global options
     style.set_quiet(parsed.global_options.quiet)
     style.set_json_mode(parsed.global_options.json)
+
+    if parsed.command is None and not parsed.global_options.quiet:
+        style.banner(title="Cpyte Package Manager")
+        style.pipeline()
+        print()
 
     try:
         dispatch(parsed)

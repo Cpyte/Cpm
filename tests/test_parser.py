@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from cpyte.cli.commands import (
+from cpyte_cpm.cli.commands import (
     AddCommand,
     BuildCommand,
     Command,
+    DoctorCommand,
+    ExecCommand,
     GlobalOptions,
     InitCommand,
     InstallCommand,
@@ -17,8 +19,8 @@ from cpyte.cli.commands import (
     UpdateCommand,
     VersionCommand,
 )
-from cpyte.cli.errors import CLIError, UnknownCommandError
-from cpyte.cli.parser import parse_args
+from cpyte_cpm.cli.errors import CLIError, UnknownCommandError
+from cpyte_cpm.cli.parser import parse_args
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +198,43 @@ class TestRunCommand:
     def test_run_missing_script_raises_error(self) -> None:
         with pytest.raises(CLIError, match="run"):
             parse(["run"])
+
+
+# ---------------------------------------------------------------------------
+# exec
+# ---------------------------------------------------------------------------
+
+class TestExecCommand:
+    def test_exec(self) -> None:
+        result = parse(["exec", "scripts/run.cpy"])
+        assert isinstance(result.command, ExecCommand)
+        assert result.command.file == "scripts/run.cpy"
+        assert result.command.args == []
+
+    def test_exec_with_passthrough_args(self) -> None:
+        result = parse(["exec", "main.cpy", "--", "-x", "42"])
+        assert isinstance(result.command, ExecCommand)
+        assert result.command.file == "main.cpy"
+        assert result.command.args == ["-x", "42"]
+
+    def test_exec_missing_file_raises_error(self) -> None:
+        with pytest.raises(CLIError, match="exec"):
+            parse(["exec"])
+
+
+# ---------------------------------------------------------------------------
+# doctor
+# ---------------------------------------------------------------------------
+
+class TestDoctorCommand:
+    def test_doctor(self) -> None:
+        result = parse(["doctor"])
+        assert isinstance(result.command, DoctorCommand)
+
+    def test_doctor_with_global_flags(self) -> None:
+        result = parse(["-v", "doctor"])
+        assert isinstance(result.command, DoctorCommand)
+        assert result.global_options.verbose is True
 
 
 # ---------------------------------------------------------------------------

@@ -19,9 +19,9 @@ try:
     from importlib.metadata import version
     CPM_VERSION = version("cpyte-cpm")
 except Exception:
-    CPM_VERSION = "1.4.1"
+    CPM_VERSION = "1.5.0"
 
-from cpyte.cli.commands import (
+from cpyte_cpm.cli.commands import (
     AddCommand,
     BuildCommand,
     Command,
@@ -33,6 +33,8 @@ from cpyte.cli.commands import (
     PublishCommand,
     RemoveCommand,
     RunCommand,
+    ExecCommand,
+    DoctorCommand,
     SearchCommand,
     UnpublishCommand,
     UpdateCommand,
@@ -41,7 +43,7 @@ from cpyte.cli.commands import (
     ListCommand,
     ValidateCommand,
 )
-from cpyte.cli.errors import CLIError, UnknownCommandError
+from cpyte_cpm.cli.errors import CLIError, UnknownCommandError
 
 COMMANDS = [
     "init",
@@ -52,6 +54,8 @@ COMMANDS = [
     "update",
     "build",
     "run",
+    "exec",
+    "doctor",
     "publish",
     "unpublish",
     "search",
@@ -151,6 +155,14 @@ def _build_command_parsers() -> dict[str, argparse.ArgumentParser]:
         "passthrough", nargs="*", metavar="ARG",
     )
 
+    parsers["exec"] = _cmd_parser("exec", "execute a .cpy file with the Cpyte compiler")
+    parsers["exec"].add_argument("file", help="path to a .cpy file")
+    parsers["exec"].add_argument(
+        "passthrough", nargs="*", metavar="ARG",
+    )
+
+    parsers["doctor"] = _cmd_parser("doctor", "diagnose the Cpyte toolchain and project")
+
     parsers["publish"] = _cmd_parser("publish", "publish a package to the registry")
     parsers["publish"].add_argument("directory", help="package directory to publish")
     parsers["publish"].add_argument("--name", required=True, help="package name (e.g. @std/json)")
@@ -215,6 +227,10 @@ def _build_command(name: str, ns: argparse.Namespace) -> Command:
         return BuildCommand()
     if name == "run":
         return RunCommand(script=ns.script, args=list(ns.passthrough))
+    if name == "exec":
+        return ExecCommand(file=ns.file, args=list(ns.passthrough))
+    if name == "doctor":
+        return DoctorCommand()
     if name == "publish":
         return PublishCommand(
             directory=ns.directory,
@@ -273,6 +289,8 @@ def _print_top_level_help() -> None:
         "  update         update packages to latest versions",
         "  build          build the project",
         "  run            run a script",
+        "  exec           execute a .cpy file with the Cpyte compiler",
+        "  doctor         diagnose the Cpyte toolchain and project",
         "  publish        publish a package to the registry",
         "  unpublish      remove a package from the registry",
         "  search         search for packages",
@@ -337,7 +355,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> ParsedCLI:
 
     # Handle top-level --version
     if known.version:
-        print(f"cpm {CPM_VERSION}")
+        from cpyte_cpm.compiler import get_cpyte_version
+        cpyte_ver = get_cpyte_version()
+        print(f"cpm {CPM_VERSION}  (cpyte {cpyte_ver})")
         raise SystemExit(0)
 
     # Handle top-level --help (only if no command follows)
