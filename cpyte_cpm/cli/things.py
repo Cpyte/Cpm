@@ -255,6 +255,10 @@ def init_project(global_opt: GlobalOptions, command: InitCommand):
 
 # Set scorpion = true to also pre-compile a .sef (Scorpion RISC-V) artifact
 # on every build:  scorpion = true
+#
+# [cpm.build]
+# pic = true               # dynamic SEF v2 (PIC + relocations); default true
+# exports = ["bigint_add"] # library symbols to mark as exported
 """)
 
     style.print_success(f"Initialized CPM project: {project_name}")
@@ -716,6 +720,8 @@ def build_project(global_opt: GlobalOptions, command: BuildCommand):
 
     # Find the project entry point
     entry = _find_project_entry(project_dir, manifest.name)
+    if manifest.build.main:
+        entry = project_dir / manifest.build.main
     if entry is None:
         style.print_warning("No entry point found (looked for main.cpy, <project>.cpy, src/main.cpy).")
         style.print_info("Add a [cpm.build] section to cpytoml or create a build.py script.")
@@ -732,7 +738,12 @@ def build_project(global_opt: GlobalOptions, command: BuildCommand):
     if manifest.scorpion:
         style.print_header(f"Scorpion (RISC-V) build for {entry.name}")
         with style.Spinner("cross-compiling to SEF"):
-            sef_rc, sef_path = cpyte_toolchain.emit_scorpion(entry, cwd=project_dir)
+            sef_rc, sef_path = cpyte_toolchain.emit_scorpion(
+                entry,
+                cwd=project_dir,
+                pic=manifest.build.pic,
+                exports=manifest.build.exports or None,
+            )
         if sef_rc != 0:
             style.print_error(f"Scorpion build failed with exit code {sef_rc}")
             style.print_warning("Install the RISC-V toolchain (riscv*-elf-gcc) to cross-compile.")

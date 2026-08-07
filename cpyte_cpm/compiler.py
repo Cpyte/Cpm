@@ -142,7 +142,13 @@ def run_compiler(args: list[str], cwd: Path | None = None, capture: bool = False
     )
 
 
-def build_project(source: Path, output: Path, opt_level: int = 3, mode: str = "aot") -> int:
+def build_project(
+    source: Path,
+    output: Path,
+    opt_level: int = 3,
+    mode: str = "aot",
+    pic: bool = False,
+) -> int:
     """Compile a `.cpy` file with the Cpyte compiler.
 
     modes: aot (machine object), jit (run), emit-llvm (.ll), scorpion (.sef)
@@ -150,6 +156,8 @@ def build_project(source: Path, output: Path, opt_level: int = 3, mode: str = "a
     args = []
     if mode in ("aot", "jit", "emit-llvm", "scorpion"):
         args.append(f"--{mode}")
+    if mode == "scorpion" and pic:
+        args.append("--pic")
     args.append(str(source))
     if mode == "aot":
         args.append("-o")
@@ -165,14 +173,31 @@ def run_cpy(source: Path, args: list[str] | None = None) -> int:
     return result.returncode
 
 
-def emit_scorpion(source: Path, cwd: Path | None = None) -> tuple[int, Path]:
+def emit_scorpion(
+    source: Path,
+    cwd: Path | None = None,
+    pic: bool = True,
+    exports: list[str] | None = None,
+) -> tuple[int, Path]:
     """Cross-compile a `.cpy` file for Scorpion (RISC-V), producing a `.sef`.
+
+    With ``pic=True`` the build uses the dynamic SEF v2 path (PIC codegen,
+    load-time relocation, import/export records). ``exports`` lists symbols
+    to mark as exported library entry points (passed as ``--export NAME``).
 
     Returns (returncode, sef_path). The SEF is written next to the source
     file (e.g. ``main.cpy`` → ``main.sef``).
     """
     sef_path = source.with_suffix(".sef")
-    result = run_compiler(["--scorpion", str(source)], cwd=cwd or source.parent)
+    args = ["--scorpion"]
+    if pic:
+        args.append("--pic")
+    if exports:
+        for name in exports:
+            args.append("--export")
+            args.append(name)
+    args.append(str(source))
+    result = run_compiler(args, cwd=cwd or source.parent)
     return result.returncode, sef_path
 
 

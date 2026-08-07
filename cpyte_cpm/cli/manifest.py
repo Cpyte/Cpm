@@ -13,6 +13,11 @@ Manifest format (spec):
     arch = "x86_64"
     features = ["gui", "ssl"]
 
+    [cpm.build]
+    main = "main.cpy"          # entry override (default: auto-detected)
+    pic = true                 # PIC + dynamic SEF v2 for scorpion builds
+    exports = ["bigint_add"]   # library symbols to export (dynamic SEF)
+
     [cpm.dependencies]
     "@std/json" = "^2.0"
     "@std/http" = "1.0"
@@ -196,6 +201,18 @@ class Target:
 
 
 @dataclass
+class BuildConfig:
+    """Build configuration from the [cpm.build] section."""
+    main: str = ""
+    pic: bool = True
+    exports: list[str] = field(default_factory=list)
+
+    @property
+    def is_set(self) -> bool:
+        return bool(self.main or not self.pic or self.exports)
+
+
+@dataclass
 class Manifest:
     """Represents a cpytoml project manifest."""
     name: str = ""
@@ -206,6 +223,7 @@ class Manifest:
     repos: list[str] = field(default_factory=list)
     packages: list[PackageSpec] = field(default_factory=list)
     target: Target = field(default_factory=Target)
+    build: BuildConfig = field(default_factory=BuildConfig)
     path: Optional[Path] = None
 
     def add(self, spec: PackageSpec) -> bool:
@@ -247,6 +265,17 @@ class Manifest:
         if self.repos:
             lines.append(f"repos = {self.repos}")
         lines.append("")
+
+        # Build section
+        if self.build.is_set:
+            lines.append("[cpm.build]")
+            if self.build.main:
+                lines.append(f'main = "{self.build.main}"')
+            if not self.build.pic:
+                lines.append("pic = false")
+            if self.build.exports:
+                lines.append(f"exports = {self.build.exports}")
+            lines.append("")
 
         # Target section
         has_target = self.target.os or self.target.arch or self.target.features
@@ -359,6 +388,14 @@ def _parse_toml(content: str, manifest: Manifest) -> None:
                     manifest.target.arch = value.strip('"')
                 elif key == "features":
                     manifest.target.features = _parse_list(value)
+
+            elif section == "cpm.build":
+                if key == "main":
+                    manifest.build.main = value.strip('"')
+                elif key == "pic":
+                    manifest.build.pic = value.strip().lower() == "true"
+                elif key == "exports":
+                    manifest.build.exports = _parse_list(value)
 
             elif section == "cpm.dependencies":
                 # New format: "@std/json" = "^2.0"
