@@ -123,7 +123,8 @@ class ListCommand:
 
 @dataclass(frozen=True)
 class ValidateCommand:
-    pass
+    fix: bool = False
+    strict: bool = False
 
 
 @dataclass(frozen=True)
@@ -140,6 +141,16 @@ class LoginCommand:
 @dataclass(frozen=True)
 class LogoutCommand:
     server: str = ""
+
+
+@dataclass(frozen=True)
+class ReportCommand:
+    package: str
+    reason: str = "malware"
+    details: str = ""
+    version: str = ""
+    server: str = ""
+    token: str = ""
 
 
 Command = Union[

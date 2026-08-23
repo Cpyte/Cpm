@@ -5,11 +5,14 @@ Each handler orchestrates the full pipeline for its command:
 """
 
 import json
+import re
 import shutil
+import stat as stat_mod
 import subprocess
 import sys
 from pathlib import Path
 
+from .errors import CLIError
 from cpyte_cpm.cli.commands import (
     AddCommand,
     BuildCommand,
@@ -53,7 +56,13 @@ from .manifest import (
     read_package_json,
     write_manifest,
 )
-from .sat import _package_path, deduplicator, resolve_get, resolve_remove
+from .sat import (
+    _package_path,
+    _version_satisfies,
+    deduplicator,
+    resolve_get,
+    resolve_remove,
+)
 
 DEFAULT_REPO = "https://cypackage.5gnew.io.vn"
 DEVICE_POLL_INTERVAL = 3          # seconds between polls
@@ -1076,6 +1085,71 @@ def logout_device(global_opt: GlobalOptions, command: LogoutCommand):
 
 
 # ---------------------------------------------------------------------------
+# cpm report
+# ---------------------------------------------------------------------------
+
+def _json_or_error(resp):
+    """Best-effort JSON decode of an HTTP response."""
+    try:
+        return resp.json()
+    except ValueError:
+        return {}
+
+
+def report_package(global_opt: GlobalOptions, command: ReportCommand):
+    """Report a package for malware or abuse."""
+    import requests as rq
+
+    server = command.server or (global_opt.server[0] if global_opt.server else "") \
+        or global_opt.config or DEFAULT_REPO
+    server = server.rstrip("/")
+
+    token = command.token
+    if not token:
+        creds = auth_store.load_credentials(server)
+        if creds:
+            token = creds.token
+            if global_opt.verbose:
+                style.print_verbose(f"Using stored credentials for {server}")
+    if not token:
+        raise CLIError(
+            "no auth token — run 'cpm login' first or pass --token"
+        )
+
+    payload = {
+        "package": command.package,
+        "reason": command.reason,
+        "details": command.details,
+    }
+    if command.version:
+        payload["version"] = command.version
+
+    with style.Spinner(f"reporting {command.package}"):
+        try:
+            resp = rq.post(
+                f"{server}/api/report",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=15,
+            )
+        except rq.RequestException as exc:
+            raise CLIError(f"cannot reach {server}: {exc}")
+
+    body = _json_or_error(resp)
+    if resp.status_code == 201:
+        style.print_success(
+            f"Report #{body.get('id')} filed for {command.package} "
+            f"({command.reason}) — admins will review it"
+        )
+    elif resp.status_code == 200 and body.get("updated"):
+        style.print_success(
+            f"Updated your open report #{body.get('id')} for {command.package}"
+        )
+    else:
+        raise CLIError(body.get("error", f"report failed ({resp.status_code})"))
+
+
+# ---------------------------------------------------------------------------
 # cpm publish
 # ---------------------------------------------------------------------------
 
@@ -1423,69 +1497,360 @@ def list_installed_packages(global_opt: GlobalOptions, command: ListCommand):
 # cpm validate
 # ---------------------------------------------------------------------------
 
+_KNOWN_OS = {"linux", "darwin", "windows"}
+_KNOWN_ARCH = {"x86_64", "aarch64", "arm"}
+_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]*$")
+_VERSION_RE = re.compile(r"^\d+\.\d+(\.\d+)?([-+][0-9A-Za-z.-]+)?$")
+_CONSTRAINT_RE = re.compile(r"^(\^|~|~=|>=|<=|==|!=|>|<)?\d+(\.\d+){0,3}(\.\*)?$")
+_CHECKSUM_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def _constraint_satisfied(constraint: str, version: str) -> bool:
+    """True if `version` satisfies `constraint` (caret/tilde/bare/specifier aware).
+
+    Unlike sat._version_satisfies this actually understands '^' and '~'
+    instead of silently accepting everything on parse failure.
+    """
+    from packaging.version import InvalidVersion, Version
+
+    if not constraint or constraint in ("latest", "*"):
+        return True
+    try:
+        actual = Version(version)
+    except InvalidVersion:
+        return False
+
+    if constraint.startswith(("==", "!=", "<=", ">=", "<", ">", "~=")) \
+            or "," in constraint or "||" in constraint:
+        try:
+            from packaging.specifiers import SpecifierSet
+            return version in SpecifierSet(constraint)
+        except Exception:
+            return False
+
+    m = re.match(r"^(\^|~|~=)?(\d+)(?:\.(\d+))?(?:\.(\d+))?$", constraint.strip())
+    if not m:
+        return False
+    op, maj, mi, pa = m.group(1), int(m.group(2)), m.group(3), m.group(4)
+    mi = int(mi) if mi is not None else 0
+    pa = int(pa) if pa is not None else 0
+
+    if op == "^":
+        # ^X.Y.Z := >=X.Y.Z <(X+1).0.0 ; when X==0 pin minor; when 0.Y==0 pin patch
+        if (actual.major, actual.minor, actual.micro) < (maj, mi, pa):
+            return False
+        if maj > 0:
+            return actual < Version(f"{maj + 1}.0.0")
+        if mi > 0:
+            return actual < Version(f"0.{mi + 1}.0")
+        return actual < Version(f"0.0.{pa + 1}")
+    if op in ("~", "~="):
+        # ~1.2.3 := >=1.2.3 <1.3.0
+        return (actual.major, actual.minor, actual.micro) >= (maj, mi, pa) \
+            and actual < Version(f"{maj}.{mi + 1}.0")
+
+    # Bare version: major-version compatibility (CPM prebuilt contract).
+    return actual.major == maj
+
+
+class _Issue:
+    """A validation finding: severity error/warn/info, optional fix action."""
+
+    __slots__ = ("severity", "message", "hint", "fix")
+
+    def __init__(self, severity, message, hint="", fix=None):
+        self.severity = severity
+        self.message = message
+        self.hint = hint
+        self.fix = fix
+
+
+def _check_manifest_fields(manifest, root, fixable, issues):
+    if not manifest.name:
+        def _fix_name():
+            derived = re.sub(r"[^a-z0-9._-]", "-", root.name.lower()).strip("-")
+            if not derived:
+                derived = "unnamed"
+            elif not derived[0].isalpha():
+                derived = "p-" + derived
+            manifest.name = derived
+            write_manifest(manifest)
+
+        issues.append(_Issue(
+            "error", "[cpm] name is missing",
+            hint="required for publishing",
+            fix=_fix_name if fixable else None,
+        ))
+    elif len(manifest.name) > 214 or not _NAME_RE.match(manifest.name):
+        issues.append(_Issue(
+            "error",
+            f"[cpm] invalid project name: {manifest.name!r}",
+            hint="letters/digits/._- only, must start with a letter",
+        ))
+
+    if not manifest.version or not _VERSION_RE.match(manifest.version):
+        def _fix_version():
+            manifest.version = "0.1.0"
+            write_manifest(manifest)
+
+        issues.append(_Issue(
+            "error",
+            "[cpm] version is missing" if not manifest.version
+            else f"[cpm] invalid version: {manifest.version!r} (want X.Y[.Z])",
+            hint="e.g. 0.1.0",
+            fix=_fix_version if fixable else None,
+        ))
+
+    for label, value, known in (
+        ("os", manifest.target.os, _KNOWN_OS),
+        ("arch", manifest.target.arch, _KNOWN_ARCH),
+    ):
+        if value and value not in known:
+            def _make_fix(lbl=label):
+                def _fix_target():
+                    if lbl == "os":
+                        manifest.target.os = None
+                    else:
+                        manifest.target.arch = None
+                    write_manifest(manifest)
+                return _fix_target
+
+            issues.append(_Issue(
+                "error",
+                f"[cpm.target] unknown {label}: {value!r}",
+                hint=f"known values: {', '.join(sorted(known))}",
+                fix=_make_fix() if fixable else None,
+            ))
+
+    if manifest.build.main and not (root / manifest.build.main).exists():
+        issues.append(_Issue(
+            "error",
+            f"[cpm.build] main entry not found: {manifest.build.main}",
+            hint="fix the path or create the file",
+        ))
+    for sym in manifest.build.exports:
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", sym):
+            issues.append(_Issue("warn", f"[cpm.build] invalid export symbol: {sym!r}"))
+
+    for repo in manifest.repos:
+        if not repo.startswith("https://"):
+            issues.append(_Issue(
+                "error",
+                f"insecure repo URL: {repo}",
+                hint="non-HTTPS registries can serve tampered packages",
+            ))
+
+
+def _check_dependencies(manifest, modules_dir, issues):
+    from packaging.specifiers import InvalidSpecifier, SpecifierSet
+
+    if not manifest.packages:
+        issues.append(_Issue("info", "no dependencies declared"))
+        return
+
+    for pkg in manifest.packages:
+        constraint = pkg.version.strip()
+        if constraint == "latest":
+            issues.append(_Issue(
+                "warn",
+                f"{pkg.name}@latest — unpinned dependency",
+                hint=f"pin an exact version: cpm add {pkg.name}@<version>",
+            ))
+        elif constraint in ("", "*"):
+            issues.append(_Issue("warn", f"{pkg.name}@* — wildcard matches any version"))
+        elif "," not in constraint and "||" not in constraint \
+                and not _CONSTRAINT_RE.match(constraint):
+            try:
+                SpecifierSet(constraint)
+            except InvalidSpecifier:
+                issues.append(_Issue(
+                    "error",
+                    f"{pkg.name}: malformed version constraint {constraint!r}",
+                    hint='use forms like "1.2", "^2.0", "~1.3", ">=1.0,<2"',
+                ))
+
+        pkg_dir = modules_dir / pkg.name
+        if not pkg_dir.exists() or not any(pkg_dir.iterdir()):
+            issues.append(_Issue(
+                "warn",
+                f"{pkg.name} is declared but not installed",
+                hint="run 'cpm install'",
+            ))
+
+
+def _check_lockfile(manifest, lockfile_path, modules_dir, issues):
+    from packaging.version import InvalidVersion, Version
+
+    if lockfile_path is None:
+        if manifest.packages:
+            issues.append(_Issue(
+                "warn",
+                "no cpm.lock found",
+                hint="run 'cpm install' for reproducible builds",
+            ))
+        return
+
+    try:
+        lock = read_lockfile(lockfile_path)
+    except Exception as exc:
+        issues.append(_Issue("error", f"lockfile unreadable: {exc}"))
+        return
+
+    if not lock.entries:
+        issues.append(_Issue("warn", f"{lockfile_path.name} is empty"))
+        return
+
+    for entry in lock.entries:
+        label = f"{entry.name}@{entry.version}"
+
+        # Supply-chain integrity: checksums are mandatory.
+        if not entry.checksum:
+            issues.append(_Issue(
+                "error",
+                f"{label}: locked without checksum",
+                hint="re-run 'cpm install' to record sha256 hashes",
+            ))
+        elif not _CHECKSUM_RE.match(entry.checksum):
+            issues.append(_Issue(
+                "error",
+                f"{label}: malformed checksum (want sha256:<64 hex>)",
+            ))
+
+        if entry.resolved and not entry.resolved.startswith("https://"):
+            issues.append(_Issue(
+                "error",
+                f"{label}: resolved over insecure transport",
+            ))
+
+        if entry.name and entry.version:
+            try:
+                Version(entry.version)
+            except InvalidVersion:
+                issues.append(_Issue("error", f"{label}: invalid locked version"))
+
+        if not (modules_dir / entry.name / entry.version).exists():
+            issues.append(_Issue(
+                "warn",
+                f"{label}: locked but not installed",
+                hint="run 'cpm install'",
+            ))
+
+    # Manifest <-> lockfile cross-check
+    for pkg in manifest.packages:
+        entries = lock.get_all(pkg.name)
+        if not entries:
+            issues.append(_Issue(
+                "warn",
+                f"{pkg.name}: no lockfile entry",
+                hint="run 'cpm install'",
+            ))
+            continue
+        constraint = pkg.version.strip()
+        if not any(_constraint_satisfied(constraint, e.version) for e in entries):
+            locked = ", ".join(sorted({e.version for e in entries}))
+            issues.append(_Issue(
+                "warn",
+                f"{pkg.name}: locked {locked} does not satisfy '{constraint}'",
+                hint=f"run 'cpm update {pkg.name}'",
+            ))
+
+
+def _check_security(global_opt, fixable, issues):
+    """Force correct + secure local configuration."""
+    cred_file = auth_store.auth_path()
+    if cred_file.exists():
+        mode = stat_mod.S_IMODE(cred_file.stat().st_mode)
+        if mode != 0o600:
+            def _fix_perms():
+                cred_file.chmod(stat_mod.S_IRUSR | stat_mod.S_IWUSR)
+
+            issues.append(_Issue(
+                "error",
+                f"{cred_file}: permissions {oct(mode)} expose your token "
+                "to other users",
+                hint="must be 0600",
+                fix=_fix_perms if fixable else None,
+            ))
+        for cred in auth_store.list_servers():
+            if cred.token and cred.server.startswith("http://"):
+                issues.append(_Issue(
+                    "warn",
+                    f"auth token for {cred.server} is sent over plaintext HTTP",
+                    hint="use an HTTPS registry URL",
+                ))
+
+
 def validate_manifest(global_opt: GlobalOptions, command: ValidateCommand):
-    """Validate the project manifest and lockfile."""
+    """Validate the project: manifest fields, deps, lockfile, security."""
+    import time as _time
+
+    started = _time.monotonic()
     manifest_path = find_manifest()
     if not manifest_path:
         style.print_error("No cpytoml found. Are you in a CPM project?")
-        return
-    
+        sys.exit(1)
+
+    project_root = manifest_path.parent
+    modules_dir = project_root / ".cpm" / "modules"
+
     style.print_header(f"Validating {manifest_path}")
-    
+
+    issues: list[_Issue] = []
+
     try:
         manifest = read_manifest(manifest_path)
-        style.print_success("Manifest is valid TOML")
-        
-        # Check manifest fields
-        if not manifest.name:
-            style.print_warning("Project name is empty")
-        if not manifest.version:
-            style.print_warning("Project version is empty")
-        
-        # Check dependencies
-        if manifest.packages:
-            style.print_success(f"Found {len(manifest.packages)} dependencies")
-            for pkg in manifest.packages:
-                style.print_info(f"  - {style.print_package(pkg.name, pkg.version)}")
-                
-                # Check for package.json in installed packages
-                project_root = manifest_path.parent
-                modules_dir = project_root / ".cpm" / "modules"
-                package_dir = modules_dir / pkg.name
-                
-                if package_dir.exists():
-                    versions = [d for d in package_dir.iterdir() if d.is_dir()]
-                    if versions:
-                        latest_version_dir = sorted(versions, reverse=True)[0]
-                        package_json = read_package_json(latest_version_dir)
-                        
-                        if package_json:
-                            style.print_success("    Extension package with capabilities")
-                            if package_json.capabilities.keywords:
-                                style.print_info(f"      Keywords: {', '.join(sorted(package_json.capabilities.keywords))}")
-        else:
-            style.print_info("  No dependencies declared")
-        
-        # Check lockfile
-        lockfile_path = find_lockfile()
-        if lockfile_path:
-            style.print_success(f"Lockfile found: {lockfile_path}")
-            lock = read_lockfile(lockfile_path)
-            if lock.entries:
-                style.print_success(f"Lockfile contains {len(lock.entries)} entries")
-            else:
-                style.print_warning("Lockfile is empty")
-        else:
-            style.print_warning("No lockfile found. Run 'cpm install' to create one.")
-        
-        # Check target platform
-        if manifest.target.os or manifest.target.arch:
-            style.print_success(f"Target platform: {manifest.target.os or 'auto'}/{manifest.target.arch or 'auto'}")
-        
-        style.print_success("\nValidation complete")
-        
     except Exception as e:
-        style.print_error(f"validation failed: {e}")
-        if global_opt.verbose:
-            import traceback
-            traceback.print_exc()
+        style.print_error(f"cpytoml is not valid TOML: {e}")
+        sys.exit(1)
+
+    _check_manifest_fields(manifest, project_root, command.fix, issues)
+    _check_dependencies(manifest, modules_dir, issues)
+    _check_lockfile(manifest, find_lockfile(), modules_dir, issues)
+    _check_security(global_opt, command.fix, issues)
+
+    # Apply auto-fixes where available.
+    fixed = 0
+    remaining: list[_Issue] = []
+    for issue in issues:
+        if issue.fix is not None:
+            try:
+                issue.fix()
+                fixed += 1
+                style.print_success(f"fixed: {issue.message}")
+                continue
+            except Exception:
+                pass
+        remaining.append(issue)
+    issues = remaining
+
+    errors = [i for i in issues if i.severity == "error"]
+    warns = [i for i in issues if i.severity == "warn"]
+    infos = [i for i in issues if i.severity == "info"]
+
+    for group, printer in ((errors, style.print_error),
+                           (warns, style.print_warning),
+                           (infos, style.print_info)):
+        for issue in group:
+            printer(issue.message)
+            if issue.hint:
+                print(f"      hint: {issue.hint}")
+
+    elapsed_ms = (_time.monotonic() - started) * 1000
+    failed = bool(errors) or (command.strict and warns)
+
+    parts = []
+    if errors:
+        parts.append(f"{style.Color.BOLD_RED}{len(errors)} error(s){style.Color.RESET}")
+    if warns:
+        parts.append(f"{style.Color.BOLD_YELLOW}{len(warns)} warning(s){style.Color.RESET}")
+    if fixed:
+        parts.append(f"{style.Color.GREEN}{fixed} fixed{style.Color.RESET}")
+    summary = ", ".join(parts) if parts else "all checks passed"
+
+    if failed:
+        style.print_error(f"\nValidation FAILED ({summary}, {elapsed_ms:.0f} ms)")
+        if command.strict and warns and not errors:
+            style.print_info("--strict: warnings treated as errors")
+        sys.exit(1)
+
+    style.print_success(f"\nValidation PASSED ({summary}, {elapsed_ms:.0f} ms)")

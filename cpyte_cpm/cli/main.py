@@ -39,6 +39,7 @@ def dispatch(parsed: ParsedCLI) -> None:
             LocalInstallCommand,
             LoginCommand,
             LogoutCommand,
+            ReportCommand,
             PublishCommand,
             RemoveCommand,
             RunCommand,
@@ -62,6 +63,7 @@ def dispatch(parsed: ParsedCLI) -> None:
             logout_device,
             publish_package,
             remove_deps,
+            report_package,
             run_script,
             search_packages,
             sef_tool,
@@ -82,6 +84,7 @@ def dispatch(parsed: ParsedCLI) -> None:
         register_handler(DoctorCommand, doctor_project)
         register_handler(LoginCommand, login_device)
         register_handler(LogoutCommand, logout_device)
+        register_handler(ReportCommand, report_package)
         register_handler(PublishCommand, publish_package)
         register_handler(UnpublishCommand, unpublish_package)
         register_handler(SearchCommand, search_packages)

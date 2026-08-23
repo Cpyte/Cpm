@@ -38,6 +38,7 @@ from cpyte_cpm.cli.commands import (
     ParsedCLI,
     PublishCommand,
     RemoveCommand,
+    ReportCommand,
     RunCommand,
     SearchCommand,
     SefCommand,
@@ -60,6 +61,7 @@ COMMANDS = [
     "doctor",
     "login",
     "logout",
+    "report",
     "publish",
     "unpublish",
     "search",
@@ -181,6 +183,20 @@ def _build_command_parsers() -> dict[str, argparse.ArgumentParser]:
     parsers["logout"] = _cmd_parser("logout", "remove stored registry credentials")
     parsers["logout"].add_argument("--server", default="", help="registry server URL")
 
+    parsers["report"] = _cmd_parser(
+        "report", "report a package for malware or abuse"
+    )
+    parsers["report"].add_argument("package", help="package name (e.g. @std/json)")
+    parsers["report"].add_argument(
+        "--reason", default="malware",
+        choices=["malware", "typosquatting", "spam", "license", "other"],
+        help="report reason (default: malware)",
+    )
+    parsers["report"].add_argument("--details", default="", help="extra context for reviewers")
+    parsers["report"].add_argument("--pkg-version", default="", dest="pkg_version", help="affected version")
+    parsers["report"].add_argument("--server", default="", help="registry server URL")
+    parsers["report"].add_argument("--token", default="", help="auth token (else stored credentials)")
+
     parsers["publish"] = _cmd_parser("publish", "publish a package to the registry")
     parsers["publish"].add_argument("directory", help="package directory to publish")
     parsers["publish"].add_argument("--name", required=True, help="package name (e.g. @std/json)")
@@ -207,7 +223,18 @@ def _build_command_parsers() -> dict[str, argparse.ArgumentParser]:
 
     parsers["list"] = _cmd_parser("list", "list installed packages")
 
-    parsers["validate"] = _cmd_parser("validate", "validate project manifest")
+    parsers["validate"] = _cmd_parser(
+        "validate",
+        "deep-validate manifest, lockfile and security config",
+    )
+    parsers["validate"].add_argument(
+        "--fix", action="store_true",
+        help="auto-fix what is safely fixable (missing name/version, bad target, file perms)",
+    )
+    parsers["validate"].add_argument(
+        "--strict", action="store_true",
+        help="treat warnings as errors (exit 1)",
+    )
 
     parsers["sef"] = _cmd_parser("sef", "Scorpion SEF binary tools (pack/dump/check/size)")
     parsers["sef"].add_argument(
@@ -265,6 +292,15 @@ def _build_command(name: str, ns: argparse.Namespace) -> Command:
         return LoginCommand(server=ns.server)
     if name == "logout":
         return LogoutCommand(server=ns.server)
+    if name == "report":
+        return ReportCommand(
+            package=ns.package,
+            reason=ns.reason,
+            details=ns.details,
+            version=ns.pkg_version,
+            server=ns.server,
+            token=ns.token,
+        )
     if name == "publish":
         return PublishCommand(
             directory=ns.directory,
@@ -292,7 +328,7 @@ def _build_command(name: str, ns: argparse.Namespace) -> Command:
     if name == "list":
         return ListCommand()
     if name == "validate":
-        return ValidateCommand()
+        return ValidateCommand(fix=ns.fix, strict=ns.strict)
     if name == "sef":
         args = list(ns.args)
         subcommand = args[0] if args else ""
@@ -339,10 +375,11 @@ def _print_top_level_help() -> None:
         "  search         search for packages",
         "  info           show package information",
         "  list           list installed packages",
-        "  validate       validate project manifest",
+        "  validate       deep-validate manifest, lockfile and security (--fix, --strict)",
         "  sef            Scorpion SEF binary tools (pack/dump/check/size)",
         "  login          log in to a registry (device code flow)",
         "  logout         remove stored registry credentials",
+        "  report         report a package for malware or abuse",
         "",
         "Global options:",
         "  -v, --verbose    enable verbose output",
