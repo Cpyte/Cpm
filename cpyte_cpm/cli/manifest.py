@@ -7,6 +7,8 @@ Manifest format (spec):
     name = "my-app"
     version = "1.0"
     prebuilt = false
+    scorpion = false
+    sef = false              # resolve/install SEF (Scorpion) artifacts
 
     [cpm.target]
     os = "linux"
@@ -41,7 +43,7 @@ import platform
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any
 
 MANIFEST_NAME = "cpytoml"
 PACKAGE_JSON_NAME = "package.json"
@@ -74,8 +76,8 @@ class PackageJson:
     capabilities: ExtensionCapabilities = field(default_factory=ExtensionCapabilities)
     extensions: ExtensionHooks = field(default_factory=ExtensionHooks)
     dependencies: list[str] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    path: Optional[Path] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    path: Path | None = None
 
 
 @dataclass
@@ -134,8 +136,8 @@ class Target:
         List of feature flags to enable.
         Empty list means no features.
     """
-    os: Optional[str] = None
-    arch: Optional[str] = None
+    os: str | None = None
+    arch: str | None = None
     features: list[str] = field(default_factory=list)
 
     @classmethod
@@ -219,12 +221,13 @@ class Manifest:
     version: str = "0.1.0"
     prebuilt: bool = False
     scorpion: bool = False
+    sef: bool = False
     llvm_version: str = ""
     repos: list[str] = field(default_factory=list)
     packages: list[PackageSpec] = field(default_factory=list)
     target: Target = field(default_factory=Target)
     build: BuildConfig = field(default_factory=BuildConfig)
-    path: Optional[Path] = None
+    path: Path | None = None
 
     def add(self, spec: PackageSpec) -> bool:
         """Add a package. Returns True if added/updated, False if unchanged."""
@@ -245,7 +248,7 @@ class Manifest:
                 return True
         return False
 
-    def get(self, name: str) -> Optional[PackageSpec]:
+    def get(self, name: str) -> PackageSpec | None:
         """Get a package spec by name."""
         for existing in self.packages:
             if existing.name == name:
@@ -260,6 +263,7 @@ class Manifest:
         lines.append(f'version = "{self.version}"')
         lines.append(f"prebuilt = {str(self.prebuilt).lower()}")
         lines.append(f"scorpion = {str(self.scorpion).lower()}")
+        lines.append(f"sef = {str(self.sef).lower()}")
         if self.llvm_version:
             lines.append(f'llvm_version = "{self.llvm_version}"')
         if self.repos:
@@ -299,7 +303,7 @@ class Manifest:
         return "\n".join(lines) + "\n"
 
 
-def find_manifest(start: Optional[Path] = None) -> Optional[Path]:
+def find_manifest(start: Path | None = None) -> Path | None:
     """Walk up from start directory to find cpytoml."""
     if start is None:
         start = Path.cwd()
@@ -315,7 +319,7 @@ def find_manifest(start: Optional[Path] = None) -> Optional[Path]:
         current = parent
 
 
-def read_manifest(path: Optional[Path] = None) -> Manifest:
+def read_manifest(path: Path | None = None) -> Manifest:
     """Read a cpytoml manifest file.
 
     If path is None, searches upward from cwd.
@@ -373,6 +377,8 @@ def _parse_toml(content: str, manifest: Manifest) -> None:
                     manifest.prebuilt = value.strip().lower() == "true"
                 elif key == "scorpion":
                     manifest.scorpion = value.strip().lower() == "true"
+                elif key == "sef":
+                    manifest.sef = value.strip().lower() == "true"
                 elif key == "llvm_version":
                     manifest.llvm_version = value.strip('"')
                 elif key == "repos":
@@ -411,8 +417,7 @@ def _parse_inline_packages(value: str, manifest: Manifest) -> None:
         return
 
     inner = value[1:]
-    if inner.endswith("]"):
-        inner = inner[:-1]
+    inner = inner.removesuffix("]")
 
     for item in inner.split(","):
         item = item.strip().strip('"').strip("'")
@@ -427,8 +432,7 @@ def _parse_list(value: str) -> list[str]:
         return []
 
     inner = value[1:]
-    if inner.endswith("]"):
-        inner = inner[:-1]
+    inner = inner.removesuffix("]")
 
     return [
         item.strip().strip('"').strip("'")
@@ -437,7 +441,7 @@ def _parse_list(value: str) -> list[str]:
     ]
 
 
-def find_package_json(package_dir: Path) -> Optional[Path]:
+def find_package_json(package_dir: Path) -> Path | None:
     """Find package.json in a package directory."""
     package_json = package_dir / PACKAGE_JSON_NAME
     if package_json.exists():
@@ -445,7 +449,7 @@ def find_package_json(package_dir: Path) -> Optional[Path]:
     return None
 
 
-def read_package_json(package_dir: Path) -> Optional[PackageJson]:
+def read_package_json(package_dir: Path) -> PackageJson | None:
     """Read package.json from a package directory."""
     package_json_path = find_package_json(package_dir)
     if not package_json_path:
@@ -454,7 +458,7 @@ def read_package_json(package_dir: Path) -> Optional[PackageJson]:
     try:
         with open(package_json_path, 'r') as f:
             data = json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
+    except (OSError, json.JSONDecodeError) as e:
         print(f"Warning: Failed to read package.json: {e}")
         return None
     

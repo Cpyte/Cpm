@@ -18,11 +18,10 @@ import os
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass, field
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
-
-from .cli import style
+from typing import Any
 
 # Distribution names on PyPI / the Cpyte registry
 COMPILER_DIST = "cpyte"
@@ -34,7 +33,7 @@ class CompilerInfo:
 
     available: bool = False
     version: str = ""
-    binary: Optional[str] = None
+    binary: str | None = None
     llvm_version: str = ""
     module_error: str = ""
     binary_error: str = ""
@@ -202,6 +201,103 @@ def emit_scorpion(
 
 
 # ---------------------------------------------------------------------------
+# Toolchain capability detection
+# ---------------------------------------------------------------------------
+
+_CODE_GEN_PROBES: dict[str, dict] = {
+    # System-header codegen (setjmp/longjmp) — broke on compilers before 2.7.2
+    "setjmp": {
+        "mode": "jit",
+        "platforms": ("darwin",),
+        "source": (
+            'import "ApplicationServices/ApplicationServices.h"\n\n'
+            "def main() -> int:\n"
+            "    return 0\n"
+        ),
+    },
+    # Read-only `(name)` parameter views
+    "const_params": {
+        "mode": "jit",
+        "source": (
+            "def f((x): int) -> int:\n"
+            "    return x\n\n"
+            "def main() -> int:\n"
+            "    return f(5)\n"
+        ),
+    },
+    # SEF v2 cross-compilation to RISC-V
+    "scorpion": {
+        "mode": "scorpion",
+        "source": (
+            "def main() -> int:\n"
+            "    return 0\n"
+        ),
+    },
+}
+
+_codegen_feature_cache: dict[str, bool] = {}
+
+
+def has_codegen_feature(feature: str) -> bool:
+    """Probe whether the installed compiler's codegen supports ``feature``.
+
+    Probes compile a tiny program with the real toolchain, so the answer
+    reflects the *actual* compiler rather than a version table. Results are
+    memoized for the process lifetime.
+
+    Unknown features report unavailable so capability-aware resolution fails
+    loudly instead of shipping a package the compiler cannot build. Features
+    that only apply to another platform are reported available.
+    """
+    if feature in _codegen_feature_cache:
+        return _codegen_feature_cache[feature]
+
+    spec = _CODE_GEN_PROBES.get(feature)
+    if spec is None:
+        _codegen_feature_cache[feature] = False
+        return False
+
+    platforms = spec.get("platforms")
+    if platforms and sys.platform not in platforms:
+        _codegen_feature_cache[feature] = True
+        return True
+
+    ok = False
+    with tempfile.TemporaryDirectory(prefix="cpm-probe-") as td:
+        probe = Path(td) / "_probe.cpy"
+        probe.write_text(spec["source"])
+        if spec.get("mode") == "scorpion":
+            rc, _ = emit_scorpion(probe)
+            ok = rc == 0
+        else:
+            ok = run_cpy(probe) == 0
+
+    _codegen_feature_cache[feature] = ok
+    return ok
+
+
+def probe_codegen_features() -> dict[str, bool]:
+    """Probe every known codegen feature (used by ``cpm doctor``)."""
+    return {feature: has_codegen_feature(feature) for feature in _CODE_GEN_PROBES}
+
+
+def toolchain_capabilities() -> dict:
+    """Static toolchain capabilities for capability-aware resolution.
+
+    Returns ``{"compiler": <version>, "llvm": <version>}`` from the detected
+    toolchain (empty when no compiler is installed). Codegen features are
+    probed on demand via :func:`has_codegen_feature`.
+    """
+    info = detect_compiler()
+    caps = {}
+    if info.version:
+        caps["compiler"] = info.version
+    if info.llvm_version:
+        caps["llvm"] = info.llvm_version
+    return caps
+
+
+# ---------------------------------------------------------------------------
 # Manifest validation via the compiler's own validator
 # ---------------------------------------------------------------------------
 
@@ -275,6 +371,10 @@ def diagnose() -> dict[str, Any]:
         },
         "llvm_version": info.llvm_version or None,
     }
+
+    report["toolchain_capabilities"] = toolchain_capabilities()
+    if info.available:
+        report["codegen"] = probe_codegen_features()
 
     # Workspace / registry checks
     manifest = _safe_read_manifest()

@@ -12,14 +12,13 @@ Lockfile format:
     dependencies = ["@std/encoding@1.2.0"]
     llvm_version = "18.1.0"
     cpyte_version = "2.6.0"
+    sef = true
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
-
 
 LOCKFILE_NAME = "cpm.lock"
 
@@ -34,22 +33,23 @@ class LockEntry:
     dependencies: list[str] = field(default_factory=list)
     llvm_version: str = ""
     cpyte_version: str = ""
+    sef: bool = False
 
 
 @dataclass
 class Lockfile:
     """Represents a cpm.lock file."""
     entries: list[LockEntry] = field(default_factory=list)
-    path: Optional[Path] = None
+    path: Path | None = None
 
-    def get(self, name: str) -> Optional[LockEntry]:
+    def get(self, name: str) -> LockEntry | None:
         """Get a locked entry by package name (returns first match)."""
         for entry in self.entries:
             if entry.name == name:
                 return entry
         return None
 
-    def get_version(self, name: str, version: str) -> Optional[LockEntry]:
+    def get_version(self, name: str, version: str) -> LockEntry | None:
         """Get a locked entry by name and exact version."""
         for entry in self.entries:
             if entry.name == name and entry.version == version:
@@ -99,11 +99,13 @@ class Lockfile:
                 lines.append(f'llvm_version = "{entry.llvm_version}"')
             if entry.cpyte_version:
                 lines.append(f'cpyte_version = "{entry.cpyte_version}"')
+            if entry.sef:
+                lines.append("sef = true")
             lines.append("")
         return "\n".join(lines)
 
 
-def find_lockfile(start: Optional[Path] = None) -> Optional[Path]:
+def find_lockfile(start: Path | None = None) -> Path | None:
     """Walk up from start directory to find cpm.lock."""
     if start is None:
         start = Path.cwd()
@@ -119,7 +121,7 @@ def find_lockfile(start: Optional[Path] = None) -> Optional[Path]:
         current = parent
 
 
-def read_lockfile(path: Optional[Path] = None) -> Lockfile:
+def read_lockfile(path: Path | None = None) -> Lockfile:
     """Read a cpm.lock file.
 
     If path is None, searches upward from cwd.
@@ -149,7 +151,7 @@ def write_lockfile(lockfile: Lockfile) -> Path:
 
 def _parse_lockfile(content: str, lockfile: Lockfile) -> None:
     """Minimal TOML parser for [[package]] sections."""
-    current_entry: Optional[LockEntry] = None
+    current_entry: LockEntry | None = None
 
     for line in content.splitlines():
         stripped = line.strip()
@@ -185,6 +187,8 @@ def _parse_lockfile(content: str, lockfile: Lockfile) -> None:
                 current_entry.llvm_version = value.strip('"')
             elif key == "cpyte_version":
                 current_entry.cpyte_version = value.strip('"')
+            elif key == "sef":
+                current_entry.sef = value.strip().lower() == "true"
             elif key == "dependencies":
                 # Parse array: ["dep1", "dep2"]
                 inner = value.strip("[]")

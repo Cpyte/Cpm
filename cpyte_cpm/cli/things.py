@@ -5,58 +5,59 @@ Each handler orchestrates the full pipeline for its command:
 """
 
 import json
-import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from . import style
+from cpyte_cpm.cli.commands import (
+    AddCommand,
+    BuildCommand,
+    DoctorCommand,
+    ExecCommand,
+    GlobalOptions,
+    InfoCommand,
+    InitCommand,
+    InstallCommand,
+    ListCommand,
+    LocalInstallCommand,
+    LoginCommand,
+    LogoutCommand,
+    PublishCommand,
+    RemoveCommand,
+    RunCommand,
+    SearchCommand,
+    SefCommand,
+    UnpublishCommand,
+    UpdateCommand,
+    ValidateCommand,
+)
+
 from .. import compiler as cpyte_toolchain
-from .sat import resolve_get, resolve_remove, deduplicator, _package_path
-from .executor import execute, _ensure_cache_dir, _module_path
+from . import auth as auth_store
+from . import style
+from .executor import _module_path, execute
+from .gethins import fetch_group, fetch_repo_multi, find_package_metadata
+from .lockfile import (
+    LockEntry,
+    find_lockfile,
+    read_lockfile,
+    write_lockfile,
+)
 from .manifest import (
     Manifest,
     PackageSpec,
     Target,
     find_manifest,
     read_manifest,
-    write_manifest,
     read_package_json,
-    PackageJson,
+    write_manifest,
 )
-from .lockfile import (
-    Lockfile,
-    LockEntry,
-    find_lockfile,
-    read_lockfile,
-    write_lockfile,
-)
-from .gethins import fetch_repo
-from .gethins import fetch_repo_multi
-from .gethins import fetch_group
-from .gethins import find_package_metadata
-from cpyte_cpm.cli.commands import (
-    InstallCommand,
-    LocalInstallCommand,
-    RemoveCommand,
-    AddCommand,
-    UpdateCommand,
-    InitCommand,
-    BuildCommand,
-    RunCommand,
-    ExecCommand,
-    DoctorCommand,
-    PublishCommand,
-    UnpublishCommand,
-    SearchCommand,
-    InfoCommand,
-    ListCommand,
-    ValidateCommand,
-    GlobalOptions,
-)
+from .sat import _package_path, deduplicator, resolve_get, resolve_remove
 
 DEFAULT_REPO = "https://cypackage.5gnew.io.vn"
+DEVICE_POLL_INTERVAL = 3          # seconds between polls
+DEVICE_TIMEOUT = 15 * 60          # give up after 15 minutes
 
 
 def _is_local_path(spec: str) -> bool:
@@ -179,6 +180,9 @@ def _get_target(manifest: Manifest, global_opt: GlobalOptions = None) -> Target:
     # CLI flag takes priority
     if global_opt and global_opt.target:
         target_str = global_opt.target
+        # Scorpion (RISC-V) shorthand targets
+        if target_str in ("scorpion", "riscv32", "riscv32-unknown-elf"):
+            return Target(os="scorpion", arch="riscv32")
         parts = target_str.split("/")
         os_name = parts[0] if len(parts) > 0 else None
         arch = parts[1] if len(parts) > 1 else None
@@ -202,6 +206,7 @@ def _lock_from_instruction(inst: dict, deps: list[str] | None = None) -> LockEnt
         dependencies=deps or [],
         llvm_version=inst.get("llvm_version", ""),
         cpyte_version=inst.get("cpyte_version", ""),
+        sef=bool(inst.get("sef")),
     )
 
 
@@ -210,6 +215,30 @@ def _compiler_pin(prebuilt: bool) -> str:
     if not prebuilt:
         return ""
     return cpyte_toolchain.get_cpyte_version()
+
+
+# ---------------------------------------------------------------------------
+# cpm sef
+# ---------------------------------------------------------------------------
+
+def sef_tool(global_opt: GlobalOptions, command: SefCommand):
+    """Scorpion SEF binary tools (pack/dump/check/size).
+
+    Delegates to the Cpyte compiler's `cpy sef` subcommands so CPM and the
+    compiler always agree on the SEF binary format.
+    """
+    if not command.subcommand:
+        style.print_error("Usage: cpm sef <pack|dump|check|size> [args...]")
+        style.print_info("e.g.  cpm sef check out/main.sef")
+        return
+
+    toolchain = cpyte_toolchain.detect_compiler()
+    if not toolchain.available:
+        style.print_error("Cpyte compiler not detected. Run 'cpm doctor' for details.")
+        return
+
+    result = cpyte_toolchain.run_compiler(["sef", command.subcommand] + command.args)
+    sys.exit(result.returncode)
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +284,9 @@ def init_project(global_opt: GlobalOptions, command: InitCommand):
 
 # Set scorpion = true to also pre-compile a .sef (Scorpion RISC-V) artifact
 # on every build:  scorpion = true
+#
+# Set sef = true to install SEF artifacts from the registry instead of source:
+#   sef = true
 #
 # [cpm.build]
 # pic = true               # dynamic SEF v2 (PIC + relocations); default true
@@ -328,7 +360,7 @@ def add_deps(global_opt: GlobalOptions, command: AddCommand):
         pkg_tuples = [(s.name, s.version) for s in to_install]
         target = _get_target(manifest)
         llvm_version = global_opt.llvm_version or manifest.llvm_version
-        tree = resolve_get(pkg_tuples, repos, target=target, prebuilt=manifest.prebuilt, llvm_version=llvm_version, cpyte_version=_compiler_pin(manifest.prebuilt))
+        tree = resolve_get(pkg_tuples, repos, target=target, prebuilt=manifest.prebuilt, llvm_version=llvm_version, cpyte_version=_compiler_pin(manifest.prebuilt), capabilities=cpyte_toolchain.toolchain_capabilities())
         instructions = deduplicator(tree)
 
         if global_opt.verbose:
@@ -336,7 +368,7 @@ def add_deps(global_opt: GlobalOptions, command: AddCommand):
 
         project_root = manifest.path.parent
         execute(instructions, project_root, repos[0], prebuilt=manifest.prebuilt,
-                force=command.force, no_cache=global_opt.no_cache)
+                force=command.force, no_cache=global_opt.no_cache, sef=manifest.sef)
 
         # Lock resolved versions
         lock = read_lockfile()
@@ -422,7 +454,7 @@ def install_deps(global_opt: GlobalOptions, command: InstallCommand):
         manifest = read_manifest()
         target = _get_target(manifest)
         llvm_version = global_opt.llvm_version or manifest.llvm_version
-        tree = resolve_get(pkg_tuples, repos, target=target, prebuilt=manifest.prebuilt, llvm_version=llvm_version, cpyte_version=_compiler_pin(manifest.prebuilt))
+        tree = resolve_get(pkg_tuples, repos, target=target, prebuilt=manifest.prebuilt, llvm_version=llvm_version, cpyte_version=_compiler_pin(manifest.prebuilt), capabilities=cpyte_toolchain.toolchain_capabilities())
         instructions = deduplicator(tree)
 
         if global_opt.verbose:
@@ -430,7 +462,7 @@ def install_deps(global_opt: GlobalOptions, command: InstallCommand):
 
         project_root = manifest.path.parent
         execute(instructions, project_root, repos[0], prebuilt=manifest.prebuilt,
-                force=command.force, no_cache=global_opt.no_cache)
+                force=command.force, no_cache=global_opt.no_cache, sef=manifest.sef)
 
         lock = read_lockfile()
         for inst in instructions:
@@ -462,7 +494,7 @@ def install_deps(global_opt: GlobalOptions, command: InstallCommand):
         style.print_header(f"Installing {len(to_install)} package(s) from manifest")
         target = _get_target(manifest)
         llvm_version = global_opt.llvm_version or manifest.llvm_version
-        tree = resolve_get(to_install, repos, target=target, prebuilt=manifest.prebuilt, llvm_version=llvm_version, cpyte_version=_compiler_pin(manifest.prebuilt))
+        tree = resolve_get(to_install, repos, target=target, prebuilt=manifest.prebuilt, llvm_version=llvm_version, cpyte_version=_compiler_pin(manifest.prebuilt), capabilities=cpyte_toolchain.toolchain_capabilities())
         instructions = deduplicator(tree)
 
         if global_opt.verbose:
@@ -470,7 +502,7 @@ def install_deps(global_opt: GlobalOptions, command: InstallCommand):
 
         project_root = manifest.path.parent
         execute(instructions, project_root, repos[0], prebuilt=manifest.prebuilt,
-                force=command.force, no_cache=global_opt.no_cache)
+                force=command.force, no_cache=global_opt.no_cache, sef=manifest.sef)
 
         for inst in instructions:
             if "GET" in inst:
@@ -664,13 +696,14 @@ def update_deps(global_opt: GlobalOptions, command: UpdateCommand):
                         "url": u["url"],
                         "checksum": u["checksum"],
                         "version": u["new"],
+                        "sef": True if manifest.sef else False,
                     }]
                     all_instructions.extend(instructions)
                     lock.add(_lock_from_instruction(instructions[0]))
             if all_instructions:
                 project_root = manifest.path.parent
                 execute(all_instructions, project_root, repos[0], prebuilt=manifest.prebuilt,
-                        force=False, no_cache=global_opt.no_cache)
+                        force=False, no_cache=global_opt.no_cache, sef=manifest.sef)
             write_lockfile(lock)
 
 
@@ -728,14 +761,23 @@ def build_project(global_opt: GlobalOptions, command: BuildCommand):
         return
 
     style.print_header(f"Building {entry.name}")
-    result = cpyte_toolchain.run_compiler(["build", str(entry)], cwd=project_dir)
+    compiler_args = ["build", str(entry)]
+    if command.opt:
+        compiler_args += ["--opt", "2"]
+    if command.osize:
+        compiler_args.append("--osize")
+    if command.debug:
+        compiler_args.append("--debug")
+    if command.lto:
+        compiler_args.append("--lto")
+    result = cpyte_toolchain.run_compiler(compiler_args, cwd=project_dir)
     if result.returncode != 0:
         style.print_error(f"Build failed with exit code {result.returncode}")
         sys.exit(result.returncode)
     style.print_success("Build complete")
 
     # Scorpion-ready projects also pre-compile a .sef artifact
-    if manifest.scorpion:
+    if command.scorpion or manifest.scorpion:
         style.print_header(f"Scorpion (RISC-V) build for {entry.name}")
         with style.Spinner("cross-compiling to SEF"):
             sef_rc, sef_path = cpyte_toolchain.emit_scorpion(
@@ -888,6 +930,14 @@ def doctor_project(global_opt: GlobalOptions, command: DoctorCommand):
         f"  llvm       : {report['llvm_version'] or '-'}",
     ])
 
+    codegen = report.get("codegen")
+    if codegen:
+        lines = []
+        for feature, ok in codegen.items():
+            mark = f"{style.Color.GREEN}ok{style.Color.RESET}" if ok else f"{style.Color.RED}missing{style.Color.RESET}"
+            lines.append(f"  {feature:14} {mark}")
+        style.box("Codegen Features", lines)
+
     if not compiler["detected"]:
         if compiler["module_error"]:
             style.print_warning(f"  python import failed: {compiler['module_error']}")
@@ -910,6 +960,122 @@ def doctor_project(global_opt: GlobalOptions, command: DoctorCommand):
 
 
 # ---------------------------------------------------------------------------
+# cpm login / logout (device code flow)
+# ---------------------------------------------------------------------------
+
+def _resolve_server(global_opt: GlobalOptions, explicit: str = "") -> str:
+    """Pick the registry server: CLI flag > stored default > DEFAULT_REPO."""
+    if explicit:
+        return explicit.rstrip("/")
+    creds = auth_store.load_credentials()
+    if creds:
+        return creds.server
+    if global_opt.server:
+        return global_opt.server[0].rstrip("/")
+    return DEFAULT_REPO
+
+
+def login_device(global_opt: GlobalOptions, command: LoginCommand):
+    """Log in to a registry using the device code flow.
+
+    1. Ask the registry for a short human-readable code
+    2. Open the browser at the verification URL
+    3. Poll until the user approves (or denies / code expires)
+    4. Store the returned API token locally
+    """
+    import time
+    import webbrowser
+
+    import requests as rq
+
+    # NOTE: --server is a global option, so it lands in global_opt.server
+    server = command.server or (global_opt.server[0] if global_opt.server else "") \
+        or global_opt.config or ""
+    if not server:
+        creds = auth_store.load_credentials()
+        server = creds.server if creds else DEFAULT_REPO
+    server = server.rstrip("/")
+
+    style.print_header(f"Logging in to {server}")
+
+    try:
+        resp = rq.post(f"{server}/auth/device/start", timeout=15)
+    except Exception as exc:
+        style.print_error(f"Cannot reach {server}: {exc}")
+        sys.exit(1)
+    if resp.status_code != 200:
+        style.print_error(f"Registry does not support device login ({resp.status_code})")
+        style.print_info("Update the registry server to the latest version.")
+        sys.exit(1)
+
+    data = resp.json()
+    code = data["code"]
+    verify_url = data.get("verify_url") or f"{server}/auth/device?code={code}"
+    expires_in = int(data.get("expires_in", 900))
+
+    style.print_info("To approve this login, open:")
+    style.print_info(f"  {verify_url}")
+    print()
+    style.print_info("Or enter this code manually:")
+    print(style.Color.BOLD_CYAN + f"  {code}" + style.Color.RESET)
+    print()
+
+    try:
+        webbrowser.open(verify_url)
+    except Exception:
+        pass
+
+    interval = max(1, int(data.get("interval", DEVICE_POLL_INTERVAL)))
+    deadline = time.time() + min(expires_in, DEVICE_TIMEOUT) + 5
+
+    with style.Spinner("waiting for approval"):
+        while time.time() < deadline:
+            try:
+                poll = rq.post(
+                    f"{server}/auth/device/poll",
+                    json={"code": code},
+                    timeout=10,
+                )
+            except Exception:
+                time.sleep(interval)
+                continue
+            body = poll.json() if poll.status_code in (200, 400) else {}
+            status = body.get("status", "")
+            if poll.status_code == 200 and status == "approved":
+                token = body["token"]
+                email = body.get("email", "")
+                path = auth_store.save_credentials(server, token, email)
+                style.print_success(f"Logged in as {email}" if email else "Logged in")
+                style.print_info(f"Credentials saved to {path}")
+                return
+            if status in ("denied", "expired"):
+                break
+            if status == "pending":
+                time.sleep(interval)
+                continue
+            # unexpected response shape — back off and retry
+            time.sleep(interval)
+
+    style.print_error("Login was not approved in time" if status != "denied" else "Login denied")
+    sys.exit(1)
+
+
+def logout_device(global_opt: GlobalOptions, command: LogoutCommand):
+    """Remove stored registry credentials."""
+    server = command.server or (global_opt.server[0] if global_opt.server else "") \
+        or global_opt.config or ""
+    removed = auth_store.clear_credentials(server)
+    creds = auth_store.list_servers()
+    if not removed:
+        style.print_warning("No stored credentials found" + (f" for {server}" if server else ""))
+        return
+    style.print_success(
+        f"Logged out of {server.rstrip('/')}"
+        if server else "Logged out (all servers)"
+    )
+
+
+# ---------------------------------------------------------------------------
 # cpm publish
 # ---------------------------------------------------------------------------
 
@@ -923,13 +1089,19 @@ def publish_package(global_opt: GlobalOptions, command: PublishCommand):
     to the registry server.
     """
     import hashlib
-    import json
-    import tempfile
     import tarfile
+    import tempfile
     from pathlib import Path
+
     import requests as rq
 
     server = command.server or global_opt.config or DEFAULT_PUBLISH_SERVER
+    token = command.token
+    if not token:
+        creds = auth_store.load_credentials(server)
+        if creds and creds.token:
+            token = creds.token
+            style.print_info(f"Using stored credentials for {server} ({creds.email})" if creds.email else f"Using stored credentials for {server}")
     package_dir = Path(command.directory).resolve()
 
     if not package_dir.exists():
@@ -958,6 +1130,13 @@ def publish_package(global_opt: GlobalOptions, command: PublishCommand):
         if not sef_files:
             style.print_warning("No .sef artifact found — run 'cpm build' with scorpion enabled first.")
 
+    # Toolchain requirements: recorded for capability-aware resolution
+    toolchain_required = pkg_json.metadata.get("toolchain") if pkg_json else None
+    if toolchain_required:
+        style.print_success("package.json declares toolchain requirements:")
+        for key, value in toolchain_required.items():
+            style.print_info(f"  {key}: {value}")
+
     # Compute the URL path for the package
     if command.name.startswith("@"):
         name_path = "group/" + command.name[1:]
@@ -979,6 +1158,8 @@ def publish_package(global_opt: GlobalOptions, command: PublishCommand):
         meta["cpyte_version"] = cpyte_version
     if scorpion_ready:
         meta["scorpion"] = True
+    if toolchain_required:
+        meta["toolchain"] = toolchain_required
 
     if global_opt.verbose:
         style.print_verbose(f"Publishing {command.name}@{command.version} to {server}")
@@ -998,8 +1179,10 @@ def publish_package(global_opt: GlobalOptions, command: PublishCommand):
         # Upload
         with open(archive_path, "rb") as f:
             headers = {}
-            if command.token:
-                headers["Authorization"] = f"Bearer {command.token}"
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            if not token:
+                style.print_warning("No auth token — run 'cpm login' or pass --token")
             resp = rq.post(
                 f"{server.rstrip('/')}/publish",
                 data={"metadata": json.dumps(meta)},
@@ -1136,6 +1319,12 @@ def show_package_info(global_opt: GlobalOptions, command: InfoCommand):
                 style.print_info("  Dependencies:")
                 for dep in requires:
                     style.print_info(f"    - {dep}")
+
+            toolchain = metadata.get('toolchain', {})
+            if toolchain:
+                style.print_info("  Toolchain requirements:")
+                for key, value in toolchain.items():
+                    style.print_info(f"    {key}: {value}")
             
             if metadata.get('no_download'):
                 style.print_info("  Note: Metadata-only package (no downloadable content)")
@@ -1271,7 +1460,7 @@ def validate_manifest(global_opt: GlobalOptions, command: ValidateCommand):
                         package_json = read_package_json(latest_version_dir)
                         
                         if package_json:
-                            style.print_success(f"    Extension package with capabilities")
+                            style.print_success("    Extension package with capabilities")
                             if package_json.capabilities.keywords:
                                 style.print_info(f"      Keywords: {', '.join(sorted(package_json.capabilities.keywords))}")
         else:

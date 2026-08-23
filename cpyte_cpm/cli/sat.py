@@ -1,13 +1,11 @@
 import hashlib
-import os
-import tempfile
-from packaging.version import Version
-from .gethins import fetch_repo as f
-from .gethins import fetch_repo_multi
-from .gethins import find_package_metadata
-from . import style
-import requests as rq
 
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
+
+from ..compiler import has_codegen_feature
+from . import style
+from .gethins import fetch_repo_multi, find_package_metadata
 from .manifest import Target
 
 
@@ -20,7 +18,7 @@ def calculate_checksum(file_path: str, algorithm: str = "sha256") -> str:
     return f"{algorithm}:{hash_func.hexdigest()}"
 
 
-def _build_instruction(metadata: dict, prebuilt: bool = False) -> dict:
+def _build_instruction(metadata: dict, prebuilt: bool = False, sef: bool = False) -> dict:
     """Build a rich instruction dict from package metadata.
 
     The instruction carries everything the executor needs:
@@ -36,6 +34,8 @@ def _build_instruction(metadata: dict, prebuilt: bool = False) -> dict:
         inst["prebuilt"] = True
         inst["llvm_version"] = metadata.get("llvm_version", "")
         inst["cpyte_version"] = metadata.get("cpyte_version", "")
+    if sef:
+        inst["sef"] = True
     if metadata.get("no_download"):
         inst["no_download"] = True
     return inst
@@ -102,7 +102,51 @@ def _check_version_compat(package_version: str, project_version: str, label: str
         return True
 
 
-def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None, target: Target = None, prebuilt: bool = False, llvm_version: str = None, cpyte_version: str = None):
+def _version_satisfies(required: str, actual: str) -> bool:
+    """Check whether ``actual`` satisfies the ``required`` version constraint.
+
+    Supports PEP 440 specifiers (``>=22``, ``<19.1.0``, ``==3.14``, unions
+    and comma lists). A bare version means major-version compatibility — the
+    prebuilt IR contract between package and toolchain.
+    """
+    if not required or not actual:
+        return True
+    required = str(required).strip()
+    operators = ("==", "!=", "<=", ">=", "<", ">", "~=")
+    if required.startswith(operators) or "," in required or "||" in required:
+        try:
+            return actual in SpecifierSet(required)
+        except Exception:
+            return True
+    return _check_version_compat(required, actual, "version")
+
+
+def _matches_toolchain(required: dict, detected: dict) -> tuple[bool, str]:
+    """Check a package's ``toolchain`` requirements against detected capabilities.
+
+    ``required`` shape (recorded at publish from package.json ``metadata``):
+        {"compiler": ">=2.7.0", "llvm": ">=22", "codegen": ["setjmp"]}
+
+    Returns ``(ok, reason)``. Empty or missing requirements always pass.
+    """
+    for key, constraint in (required or {}).items():
+        if not constraint:
+            continue
+        if key in ("compiler", "llvm"):
+            actual = detected.get(key, "")
+            if not actual:
+                return False, f"requires {key} {constraint} (toolchain not detected)"
+            if not _version_satisfies(constraint, actual):
+                return False, f"requires {key} {constraint}, installed {key} is {actual}"
+        elif key == "codegen":
+            features = constraint if isinstance(constraint, list) else [constraint]
+            for feature in features:
+                if not has_codegen_feature(str(feature)):
+                    return False, f"requires codegen feature '{feature}' (not supported by installed compiler)"
+    return True, ""
+
+
+def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None, target: Target = None, prebuilt: bool = False, sef: bool = False, llvm_version: str = None, cpyte_version: str = None, capabilities: dict = None):
     """Resolve dependency tree into a flat instruction stream (GET only).
 
     Pipeline stage: Resolve -> Lower -> Optimize -> Execute
@@ -122,10 +166,19 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
         don't match the target are skipped.
     prebuilt:
         If True, fetch prebuilt metadata from registry.
+    sef:
+        If True, fetch SEF artifacts from the registry
+        (``metadata/sef/...``). Packages that don't declare SEF support
+        (``sef`` or ``scorpion`` in metadata) are skipped.
     llvm_version:
         Required LLVM version for prebuilt packages.
     cpyte_version:
         Required Cpyte compiler version for prebuilt packages.
+    capabilities:
+        Detected toolchain capabilities (``{"compiler": ..., "llvm": ...}``)
+        used to satisfy packages that declare a ``toolchain`` requirement.
+        Codegen features are probed lazily. When None, toolchain
+        requirements are skipped (best-effort).
     """
     if resolving is None:
         resolving = set()
@@ -154,6 +207,12 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
             paths_to_try = [
                 f"metadata/prebuilt/{path}/{version}",
                 f"metadata/{path}/{version}",  # fallback
+            ]
+        elif sef:
+            paths_to_try = [
+                f"metadata/sef/{path}/{version}",
+                f"metadata/{path}/{version}",  # fallback to regular metadata
+                f"metadata/sef/{path}/latest",
             ]
         else:
             paths_to_try = [
@@ -191,6 +250,26 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
             resolved.add(name)
             continue
 
+        # SEF mode: the package must actually ship a SEF artifact
+        if sef and not (metadata.get("sef") or metadata.get("scorpion")):
+            style.print_skipped(name, version, "package is not a SEF artifact (no 'sef'/'scorpion' in metadata)")
+            resolving.remove(name)
+            resolved.add(name)
+            continue
+
+        # Check declared toolchain requirements against the installed compiler
+        required_tc = metadata.get("toolchain", {}) or {}
+        if required_tc:
+            if capabilities:
+                tc_ok, tc_reason = _matches_toolchain(required_tc, capabilities)
+                if not tc_ok:
+                    style.print_skipped(name, version, tc_reason)
+                    resolving.remove(name)
+                    resolved.add(name)
+                    continue
+            else:
+                style.print_verbose(f"  {name}: declares toolchain requirements but no compiler detected; skipping check")
+
         # Check LLVM version compatibility for prebuilt packages
         if prebuilt and llvm_version:
             pkg_llvm = metadata.get("llvm_version", "")
@@ -213,10 +292,10 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
 
         if requirements:
             instructions.append(
-                resolve_get(requirements, repos, resolving, resolved, target, prebuilt, llvm_version, cpyte_version)
+                resolve_get(requirements, repos, resolving, resolved, target, prebuilt, sef, llvm_version, cpyte_version, capabilities)
             )
 
-        instructions.append(_build_instruction(metadata, prebuilt))
+        instructions.append(_build_instruction(metadata, prebuilt, sef))
 
         resolving.remove(name)
         resolved.add(name)

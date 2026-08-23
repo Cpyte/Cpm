@@ -1,4 +1,3 @@
-import requests as rq
 from . import style
 from .http_session import get_session
 

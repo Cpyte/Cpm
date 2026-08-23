@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Union
+from typing import Union
 
 
 @dataclass(frozen=True)
@@ -14,10 +14,10 @@ class GlobalOptions:
     yes: bool = False
     offline: bool = False
     no_cache: bool = False
-    config: Optional[str] = None
-    server: List[str] = field(default_factory=list)
-    target: Optional[str] = None
-    llvm_version: Optional[str] = None
+    config: str | None = None
+    server: list[str] = field(default_factory=list)
+    target: str | None = None
+    llvm_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -27,18 +27,18 @@ class InitCommand:
 
 @dataclass(frozen=True)
 class AddCommand:
-    packages: List[str] = field(default_factory=list)
+    packages: list[str] = field(default_factory=list)
     force: bool = False
 
 
 @dataclass(frozen=True)
 class RemoveCommand:
-    packages: List[str] = field(default_factory=list)
+    packages: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class InstallCommand:
-    packages: List[str] = field(default_factory=list)
+    packages: list[str] = field(default_factory=list)
     force: bool = False
 
 
@@ -50,24 +50,28 @@ class LocalInstallCommand:
 
 @dataclass(frozen=True)
 class UpdateCommand:
-    packages: List[str] = field(default_factory=list)
+    packages: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class BuildCommand:
-    pass
+    opt: bool = False            # -O2 optimization (default)
+    osize: bool = False          # optimize for size (-Os)
+    debug: bool = False          # include debug info (-g)
+    lto: bool = False            # link-time optimization
+    scorpion: bool = False       # also produce a .sef (Scorpion RISC-V) artifact
 
 
 @dataclass(frozen=True)
 class RunCommand:
     script: str = ""
-    args: List[str] = field(default_factory=list)
+    args: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class ExecCommand:
     file: str = ""
-    args: List[str] = field(default_factory=list)
+    args: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -85,7 +89,7 @@ class PublishCommand:
     directory: str = ""
     name: str = ""
     version: str = ""
-    requires: List[str] = field(default_factory=list)
+    requires: list[str] = field(default_factory=list)
     prebuilt: bool = False
     llvm_version: str = ""
     cpyte_version: str = ""
@@ -122,6 +126,22 @@ class ValidateCommand:
     pass
 
 
+@dataclass(frozen=True)
+class SefCommand:
+    subcommand: str = ""
+    args: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class LoginCommand:
+    server: str = ""
+
+
+@dataclass(frozen=True)
+class LogoutCommand:
+    server: str = ""
+
+
 Command = Union[
     InitCommand,
     AddCommand,
@@ -140,10 +160,13 @@ Command = Union[
     InfoCommand,
     ListCommand,
     ValidateCommand,
+    SefCommand,
+    LoginCommand,
+    LogoutCommand,
 ]
 
 
 @dataclass(frozen=True)
 class ParsedCLI:
     global_options: GlobalOptions = field(default_factory=GlobalOptions)
-    command: Optional[Command] = None
+    command: Command | None = None

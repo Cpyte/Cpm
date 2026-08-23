@@ -7,14 +7,13 @@ box panels, and a rich status glyph set. Pure ANSI — no external deps.
 
 from __future__ import annotations
 
-import itertools
 import json
 import os
 import sys
 import threading
 import time
-from typing import Any, Callable, Iterator
-
+from collections.abc import Iterator
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Terminal capability detection
@@ -350,7 +349,7 @@ class Spinner:
         self._stop = threading.Event()
         self._frames = SPINNER_FRAMES if _COLORS else _SPINNER_ASCII
 
-    def __enter__(self) -> "Spinner":
+    def __enter__(self) -> Spinner:
         if _tty():
             self._thread = threading.Thread(target=self._animate, daemon=True)
             self._stop.clear()

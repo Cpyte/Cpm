@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import pytest
-
 from cpyte_cpm.cli.commands import (
     AddCommand,
     BuildCommand,
-    Command,
     DoctorCommand,
     ExecCommand,
     GlobalOptions,
@@ -16,12 +14,11 @@ from cpyte_cpm.cli.commands import (
     ParsedCLI,
     RemoveCommand,
     RunCommand,
+    SefCommand,
     UpdateCommand,
-    VersionCommand,
 )
 from cpyte_cpm.cli.errors import CLIError, UnknownCommandError
 from cpyte_cpm.cli.parser import parse_args
-
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -170,6 +167,78 @@ class TestBuildCommand:
     def test_build(self) -> None:
         result = parse(["build"])
         assert isinstance(result.command, BuildCommand)
+
+    def test_build_opt(self) -> None:
+        result = parse(["build", "--opt"])
+        assert isinstance(result.command, BuildCommand)
+        assert result.command.opt is True
+
+    def test_build_osize(self) -> None:
+        result = parse(["build", "--osize"])
+        assert isinstance(result.command, BuildCommand)
+        assert result.command.osize is True
+
+    def test_build_debug(self) -> None:
+        result = parse(["build", "--debug"])
+        assert isinstance(result.command, BuildCommand)
+        assert result.command.debug is True
+
+    def test_build_lto(self) -> None:
+        result = parse(["build", "--lto"])
+        assert isinstance(result.command, BuildCommand)
+        assert result.command.lto is True
+
+    def test_build_scorpion(self) -> None:
+        result = parse(["build", "--scorpion"])
+        assert isinstance(result.command, BuildCommand)
+        assert result.command.scorpion is True
+
+    def test_build_flags_default(self) -> None:
+        result = parse(["build"])
+        assert result.command.opt is False
+        assert result.command.osize is False
+        assert result.command.debug is False
+        assert result.command.lto is False
+        assert result.command.scorpion is False
+
+
+# ---------------------------------------------------------------------------
+# sef
+# ---------------------------------------------------------------------------
+
+class TestSefCommand:
+    def test_sef_no_subcommand(self) -> None:
+        result = parse(["sef"])
+        assert isinstance(result.command, SefCommand)
+        assert result.command.subcommand == ""
+        assert result.command.args == []
+
+    def test_sef_pack(self) -> None:
+        result = parse(["sef", "pack", "main.cpy", "-o", "main.sef"])
+        assert isinstance(result.command, SefCommand)
+        assert result.command.subcommand == "pack"
+        assert result.command.args == ["main.cpy", "-o", "main.sef"]
+
+    def test_sef_dump(self) -> None:
+        result = parse(["sef", "dump", "main.sef"])
+        assert isinstance(result.command, SefCommand)
+        assert result.command.subcommand == "dump"
+        assert result.command.args == ["main.sef"]
+
+    def test_sef_check(self) -> None:
+        result = parse(["sef", "check", "main.sef"])
+        assert isinstance(result.command, SefCommand)
+        assert result.command.subcommand == "check"
+
+    def test_sef_size(self) -> None:
+        result = parse(["sef", "size", "main.sef"])
+        assert isinstance(result.command, SefCommand)
+        assert result.command.subcommand == "size"
+
+    def test_sef_unknown_subcommand_raises(self) -> None:
+        with pytest.raises(UnknownCommandError) as exc_info:
+            parse(["sef", "explode"])
+        assert "sef explode" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------

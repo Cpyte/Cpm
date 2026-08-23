@@ -18,16 +18,12 @@ import hashlib
 import os
 import shutil
 import tarfile
-import tempfile
 import zipfile
 from pathlib import Path
 
-import requests as rq
-
-from .gethins import fetch_repo
 from . import style
+from .gethins import fetch_repo
 from .http_session import get_session
-
 
 CPM_HOME = Path.home() / ".cpm"
 CACHE_DIR = CPM_HOME / "cache"
@@ -79,8 +75,7 @@ def _download(url: str, dest: Path) -> int:
     response.raise_for_status()
     size = int(response.headers.get("content-length", 0))
     with open(dest, "wb") as fp:
-        for chunk in response.iter_content(chunk_size=8192):
-            fp.write(chunk)
+        fp.writelines(response.iter_content(chunk_size=8192))
     return size
 
 
@@ -158,7 +153,7 @@ def _install_from_cache(project_root: Path, name: str, version: str) -> None:
 
 
 def execute_get(inst: dict, project_root: Path, prebuilt: bool = False,
-                force: bool = False, no_cache: bool = False) -> None:
+                force: bool = False, no_cache: bool = False, sef: bool = False) -> None:
     """Execute a single GET instruction.
 
     Parameters
@@ -173,6 +168,8 @@ def execute_get(inst: dict, project_root: Path, prebuilt: bool = False,
         If True, reinstall even if already installed.
     no_cache:
         If True, skip cache and re-download.
+    sef:
+        If True, this package is a Scorpion SEF artifact (for display).
     """
     name = inst["GET"]
     url = inst.get("url")
@@ -229,7 +226,7 @@ def execute_get(inst: dict, project_root: Path, prebuilt: bool = False,
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(cache, target)
 
-    mode = "prebuilt" if prebuilt else "source"
+    mode = "prebuilt" if prebuilt else ("sef" if sef else "source")
     style.print_installed(name, version, mode)
 
 
@@ -254,6 +251,7 @@ def execute(
     prebuilt: bool = False,
     force: bool = False,
     no_cache: bool = False,
+    sef: bool = False,
 ) -> None:
     """Execute a flat instruction stream.
 
@@ -279,11 +277,13 @@ def execute(
         If True, reinstall even if already installed.
     no_cache:
         If True, skip cache and re-download.
+    sef:
+        If True, packages are Scorpion SEF artifacts.
     """
     _ensure_cache_dir()
 
     total = len(instructions)
-    mode = "prebuilt" if prebuilt else "source"
+    mode = "prebuilt" if prebuilt else ("sef" if sef else "source")
     style.print_header(f"Executing {total} instruction(s) [{mode}]")
 
     for i, inst in enumerate(instructions, 1):
@@ -301,7 +301,7 @@ def execute(
 
         if "GET" in inst:
             style.print_step(i, total, f"GET {inst['GET']}")
-            execute_get(inst, project_root, prebuilt=prebuilt, force=force, no_cache=no_cache)
+            execute_get(inst, project_root, prebuilt=prebuilt, force=force, no_cache=no_cache, sef=sef)
         elif "REMOVE" in inst:
             style.print_step(i, total, f"REMOVE {inst['REMOVE']}")
             execute_remove(inst, project_root)
