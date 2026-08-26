@@ -1,32 +1,48 @@
 # CPM Project Structure
 
 This document specifies exactly how a CPM-managed project is laid out on
-disk, what each manifest field does, and how the pieces interact with the
-registry.
+disk and how the pieces interact. Field-level references live in the
+companion docs:
+
+| Topic | Document |
+|-------|----------|
+| Manifest fields (`cpy.toml`) | [MANIFEST.md](MANIFEST.md) |
+| `package.json`, capabilities, CLI launchers | [PACKAGES.md](PACKAGES.md) |
+| Constraint grammar, resolution, lockfile | [DEPENDENCIES.md](DEPENDENCIES.md) |
+| Entry points, build modes, SEF, prebuilt | [BUILDS.md](BUILDS.md) |
+| Registry, auth, publishing, reports | [REGISTRY.md](REGISTRY.md) |
+
+## Layout
 
 ```
 my-project/
-├── cpytoml                  # project manifest (required)
-├── cpm.lock                 # resolved dependency graph (generated)
-├── main.cpy                 # your Cpyte sources
+├── cpy.toml                   # project manifest (required)
+├── cpm.lock                   # resolved dependency graph (generated)
+├── main.cpy                   # your Cpyte sources
 ├── lib/
 │   └── helper.cpy
-├── build/                   # compiler output (generated)
-│   ├── main.cpy.ir          # lowered IR
-│   ├── main.sef             # Scorpion executable (when --scorpion / sef builds)
+├── build/                     # compiler output (generated)
+│   ├── main.cpy.ir            # lowered IR
+│   ├── main.sef               # Scorpion executable (when --scorpion / sef builds)
 │   └── ...
-└── .cpm/                    # package-manager state (generated; commit or ignore freely)
-    └── modules/             # extracted dependency packages
-        └── @std/
-            └── json/
-                └── 2.0.3/
-                    ├── package.toml      # installed-package descriptor
-                    ├── package.json      # extension capabilities (optional)
-                    ├── json.cpy
-                    └── *.sef            # prebuilt artifacts when available
+└── .cpm/                      # package-manager state (generated)
+    ├── modules/               # extracted dependency packages
+    │   └── @std/
+    │       └── json/
+    │           └── 2.0.3/
+    │               ├── package.toml      # installed-package descriptor
+    │               ├── package.json      # capabilities + bin (optional)
+    │               ├── json.cpy
+    │               └── *.sef             # prebuilt artifacts when available
+    └── bin/                   # CLI launchers generated from "bin" entries
+        └── json-cli           # POSIX shim → cpy --jit …/json.cpy
 ```
 
-## 1. The manifest: `cpytoml`
+> **Legacy filename:** older projects used an extensionless `cpytoml`
+> manifest. It is still discovered automatically, but everything now writes
+> `cpy.toml`. Rename with `mv cpytoml cpy.toml` when convenient.
+
+## 1. The manifest: `cpy.toml`
 
 ```toml
 [cpm]
@@ -51,33 +67,22 @@ main = "main.cpy"            # entry-point override (default: auto-detected)
 pic = true                   # position-independent code + dynamic SEF v2
 exports = ["bigint_add"]     # library symbols exported by dynamic SEF builds
 
+[cpm.bin]
+mytool = "src/cli.cpy"       # CLI tools this project registers (see PACKAGES.md)
+native-tool = "build/out"    # native binaries are executed directly
+
 [cpm.dependencies]
 "@std/json" = "^2.0"         # group-scoped package
 "@std/http" = "1.0"          # bare version = same-major compatibility
 "local-tool" = "latest"      # floating (validated against by `cpm validate`)
-```
 
-### Version constraint grammar
-
-| Form       | Meaning                                   |
-|------------|-------------------------------------------|
-| `1.2`      | any 1.x (major-compatibility contract)    |
-| `^1.2`     | >=1.2, <2.0                               |
-| `~1.2`     | >=1.2, <1.3                               |
-| `>=1,<2`   | PEP 440 specifier list                    |
-| `latest`   | floating; discouraged — pin in lockfile   |
-
-Platform-specific deps append the OS:
-
-```toml
 [cpm.dependencies.linux]
-"posix-api" = "1.0"
-[cpm.dependencies.windows]
-"win32-api" = "1.0"
+"posix-api" = "1.0"          # platform-scoped deps (also: windows, darwin)
 ```
 
-Legacy single-line form is still parsed:
-`packages = ["foo@^1.0", "@std/json"]`
+Full field reference with defaults and validation rules:
+[MANIFEST.md](MANIFEST.md). Constraint grammar: [DEPENDENCIES.md](DEPENDENCIES.md).
+Legacy single-line form `packages = ["foo@^1.0", …]` is still parsed.
 
 ## 2. Installed packages: `.cpm/modules`
 
@@ -86,25 +91,27 @@ Every dependency is extracted under `.cpm/modules/<name>/<exact-version>/`
 
 - **`package.toml`** — written at install time; records name, exact version,
   install mode (`source`, `prebuilt`, `sef`) and the source repo.
-- **`package.json`** *(optional)* — declares language-extension capabilities:
+- **`package.json`** *(optional)* — capabilities, extension hooks, human
+  metadata and `"bin"` CLI-tool declarations; see [PACKAGES.md](PACKAGES.md).
+- Package sources (`*.cpy`) and/or prebuilt artifacts (`*.ll`, `*.sef`).
 
-  ```json
-  {
-    "capabilities": {
-      "keywords":     ["await"],
-      "operators":    ["<|>"],
-      "tags":         [],
-      "macros":       ["assert_eq"],
-      "custom_types": ["Result"]
-    },
-    "extensions": {
-      "parser_hooks":  [], "semantic_hooks": [],
-      "codegen_hooks": [], "runtime_hooks": []
-    }
-  }
+### CLI launchers (`.cpm/bin`)
+
+Packages can ship command-line tools, pip-console-scripts style:
+
+- Declared in `package.json` under `"bin"`, or in the project's own
+  `[cpm.bin]` — both map **tool name → project-relative path**.
+- `.cpy` targets run through the compiler's JIT (`cpy --jit <file>`); any
+  other target (e.g. a compiled binary) is executed directly.
+- On install/build, CPM writes an executable POSIX shim per entry to
+  `<project>/.cpm/bin/<tool>` and prints the PATH export to add:
+
+  ```
+  export PATH="$PATH:/path/to/project/.cpm/bin"
   ```
 
-- Package sources (`*.cpy`) and/or prebuilt artifacts (`*.sef`, `*.ir`).
+- Uninstalling removes the shims owned by that package. `cpm validate`
+  flags missing targets, absolute paths and malformed tool names as errors.
 
 ## 3. The lockfile: `cpm.lock`
 
@@ -124,7 +131,7 @@ sef = true                            # entry resolves via SEF mode
 ```
 
 `cpm validate` enforces that every entry carries a well-formed sha256
-checksum and an HTTPS `resolved` URL.
+checksum and an HTTPS `resolved` URL. Details: [DEPENDENCIES.md](DEPENDENCIES.md).
 
 ## 4. Build outputs: `build/`
 
@@ -132,6 +139,9 @@ checksum and an HTTPS `resolved` URL.
 - `cpm build --scorpion` additionally emits a Scorpion SEF binary
   (`main.sef`); inspect with `cpm sef {check,size,dump} build/main.sef`.
 - `[cpm.build] pic/exports` switch to dynamic SEF v2 libraries.
+- After a successful build, `[cpm.bin]` tools are registered into `.cpm/bin`.
+
+See [BUILDS.md](BUILDS.md).
 
 ## 5. Registry-side naming
 
@@ -146,4 +156,28 @@ Package names map to URL paths on the registry:
 Publishing uploads `<version>.tar.gz` plus a `metadata.json`
 (name, version, url, requires, checksum, optional
 prebuilt/scorpion/toolchain/description/keywords) which powers
-`cpm search` and `cpm info`.
+`cpm search` and `cpm info`. Auth, publishing flow, malware reporting and
+quarantine: [REGISTRY.md](REGISTRY.md).
+
+## CLI command reference
+
+| Command | Purpose |
+|---------|---------|
+| `cpm init` | scaffold `cpy.toml` (+ template entry point) |
+| `cpm add <pkg[@ver]>…` | add dependency to manifest + install |
+| `cpm remove <pkg>` | drop dependency + uninstall |
+| `cpm install [pkg…]` | install from lockfile (or named specs) |
+| `cpm install-local <dir>` | install a package from a local directory |
+| `cpm update` | re-resolve constraints, refresh lockfile |
+| `cpm list` | list installed packages |
+| `cpm build [--scorpion] [--opt\|--osize\|--debug\|--lto]` | compile the project |
+| `cpm run <script> [-- args…]` | run a script in the project context |
+| `cpm exec <file.cpy> [-- args…]` | JIT-execute a Cpyte file |
+| `cpm sef <size\|dump\|check> <file.sef>` | inspect SEF artifacts |
+| `cpm doctor` | diagnose toolchain + project state |
+| `cpm validate [--fix] [--strict]` | deep manifest/lockfile/security checks |
+| `cpm login` / `cpm logout` | device-code auth against a registry |
+| `cpm publish [dir]` / `cpm unpublish` | upload/remove packages |
+| `cpm search <query>` | search the registry |
+| `cpm info <pkg>` | show registry metadata |
+| `cpm report <pkg>` | report malware/typosquatting/etc. |

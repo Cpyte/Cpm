@@ -24,7 +24,7 @@ def _run_project(cmd, cwd, tmp_path):
 def _project(tmp_path, toml):
     proj = tmp_path / "proj"
     proj.mkdir(exist_ok=True)
-    (proj / "cpytoml").write_text(toml)
+    (proj / "cpy.toml").write_text(toml)
     return proj
 
 
@@ -164,7 +164,7 @@ class TestValidate:
     def _project(tmp_path, toml):
         proj = tmp_path / "proj"
         proj.mkdir(exist_ok=True)
-        (proj / "cpytoml").write_text(toml)
+        (proj / "cpy.toml").write_text(toml)
         return proj
 
 
@@ -175,7 +175,7 @@ class TestFixes:
             '[cpm]\nversion = "oops"\n[cpm.target]\nos = "win95"\n',
         )
         _run_project(_cmd(fix=True), proj, tmp_path)
-        content = (proj / "cpytoml").read_text()
+        content = (proj / "cpy.toml").read_text()
         assert 'name = "proj"' in content
         assert 'version = "0.1.0"' in content
         assert 'os = "win95"' not in content
@@ -187,7 +187,7 @@ class TestFixes:
         proj = _project(tmp_path, original)
         with pytest.raises(SystemExit):
             _run_project(_cmd(), proj, tmp_path)
-        assert (proj / "cpytoml").read_text() == original
+        assert (proj / "cpy.toml").read_text() == original
 
 
 

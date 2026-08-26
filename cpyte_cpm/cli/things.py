@@ -39,7 +39,7 @@ from cpyte_cpm.cli.commands import (
 from .. import compiler as cpyte_toolchain
 from . import auth as auth_store
 from . import style
-from .executor import _module_path, execute
+from .executor import _bin_dir, _module_path, _shim_body, execute, register_bins
 from .gethins import fetch_group, fetch_repo_multi, find_package_metadata
 from .lockfile import (
     LockEntry,
@@ -48,6 +48,7 @@ from .lockfile import (
     write_lockfile,
 )
 from .manifest import (
+    MANIFEST_NAME,
     Manifest,
     PackageSpec,
     Target,
@@ -257,12 +258,12 @@ def sef_tool(global_opt: GlobalOptions, command: SefCommand):
 def init_project(global_opt: GlobalOptions, command: InitCommand):
     """Initialize a new CPM project.
 
-    Creates cpytoml in the current directory with a full template.
+    Creates cpy.toml in the current directory with a full template.
     """
-    manifest_path = Path.cwd() / "cpytoml"
+    manifest_path = Path.cwd() / MANIFEST_NAME
 
     if manifest_path.exists() and not global_opt.yes:
-        style.print_warning("cpytoml already exists. Use -y to overwrite.")
+        style.print_warning("cpy.toml already exists. Use -y to overwrite.")
         return
 
     project_name = Path.cwd().name
@@ -315,7 +316,7 @@ def add_deps(global_opt: GlobalOptions, command: AddCommand):
 
     Pipeline:
         1. Parse package specs
-        2. Write to cpytoml
+        2. Write to cpy.toml
         3. Resolve + execute (install)
         4. Lock resolved versions
     """
@@ -418,7 +419,7 @@ def remove_deps(global_opt: GlobalOptions, command: RemoveCommand):
 
     for spec in specs:
         if manifest.remove(spec.name):
-            style.print_info(f"  removed {spec.name} from {manifest.path.name if manifest.path else 'cpytoml'}")
+            style.print_info(f"  removed {spec.name} from {manifest.path.name if manifest.path else MANIFEST_NAME}")
             changed = True
         if lock.remove(spec.name):
             style.print_info(f"  removed {spec.name} from cpm.lock")
@@ -438,7 +439,7 @@ def install_deps(global_opt: GlobalOptions, command: InstallCommand):
     """Install dependencies.
 
     If packages are given, install those specific packages.
-    If no packages are given, install everything from cpytoml (uses lockfile).
+    If no packages are given, install everything from cpy.toml (uses lockfile).
     """
     repos = _get_repos(global_opt)
     packages = command.packages
@@ -482,7 +483,7 @@ def install_deps(global_opt: GlobalOptions, command: InstallCommand):
         # Install from manifest
         manifest = read_manifest()
         if not manifest.path:
-            style.print_error("No cpytoml found. Run 'cpm init' first.")
+            style.print_error("No cpy.toml found. Run 'cpm init' first.")
             return
 
         lock = read_lockfile()
@@ -575,7 +576,7 @@ def install_local_deps(global_opt: GlobalOptions, command: LocalInstallCommand):
     else:
         # Create a minimal manifest
         project_root = Path.cwd()
-        manifest = Manifest(name=project_root.name, version="0.1.0", path=project_root / "cpytoml")
+        manifest = Manifest(name=project_root.name, version="0.1.0", path=project_root / MANIFEST_NAME)
 
     # Target directory
     target = _module_path(project_root, name, version)
@@ -594,6 +595,14 @@ def install_local_deps(global_opt: GlobalOptions, command: LocalInstallCommand):
     shutil.copytree(local_path, target)
 
     style.print_installed(name, version, "local")
+
+    # Register CLI launchers declared in package.json
+    registered = register_bins(project_root, name, version, module_dir=target)
+    if registered:
+        bin_dir = _bin_dir(project_root)
+        style.print_info(
+            f"Registered CLI tools: {', '.join(registered)}\n"
+            f'  Add to PATH: export PATH="$PATH:{bin_dir}"')
 
     # Update lockfile
     lock = read_lockfile()
@@ -632,7 +641,7 @@ def update_deps(global_opt: GlobalOptions, command: UpdateCommand):
 
     manifest = read_manifest()
     if not manifest.path:
-        style.print_error("No cpytoml found. Run 'cpm init' first.")
+        style.print_error("No cpy.toml found. Run 'cpm init' first.")
         return
 
     if not packages:
@@ -727,7 +736,7 @@ def build_project(global_opt: GlobalOptions, command: BuildCommand):
     """
     manifest = read_manifest()
     if not manifest.path:
-        style.print_error("No cpytoml found. Run 'cpm init' first.")
+        style.print_error("No cpy.toml found. Run 'cpm init' first.")
         return
 
     project_dir = manifest.path.parent
@@ -766,7 +775,8 @@ def build_project(global_opt: GlobalOptions, command: BuildCommand):
         entry = project_dir / manifest.build.main
     if entry is None:
         style.print_warning("No entry point found (looked for main.cpy, <project>.cpy, src/main.cpy).")
-        style.print_info("Add a [cpm.build] section to cpytoml or create a build.py script.")
+        style.print_info("Add a [cpm.build] section to cpy.toml or create a build.py script.")
+        _register_project_bins(project_dir, manifest)
         return
 
     style.print_header(f"Building {entry.name}")
@@ -805,6 +815,32 @@ def build_project(global_opt: GlobalOptions, command: BuildCommand):
             style.print_error(f"Expected SEF at {sef_path} but it was not produced")
             sys.exit(1)
 
+    # Register project CLI tools declared in [cpm.bin]
+    _register_project_bins(project_dir, manifest)
+
+
+def _register_project_bins(project_dir: Path, manifest) -> None:
+    """Create launchers in .cpm/bin for the project's own [cpm.bin] entries."""
+    if not manifest.bin:
+        return
+    registered = []
+    for tool, rel in manifest.bin.items():
+        target = (project_dir / rel).resolve()
+        if not target.exists():
+            style.print_warning(f"[cpm.bin] '{tool}': target not found: {rel}")
+            continue
+        shim_dir = _bin_dir(project_dir)
+        shim_dir.mkdir(parents=True, exist_ok=True)
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", tool)
+        shim = shim_dir / safe
+        shim.write_text(_shim_body(manifest.name, manifest.version, safe, target, rel))
+        shim.chmod(0o755)
+        registered.append(safe)
+    if registered:
+        style.print_info(
+            f"Registered CLI tools: {', '.join(registered)}\n"
+            f'  Add to PATH: export PATH="$PATH:{_bin_dir(project_dir)}"')
+
 
 def _find_project_entry(project_dir: Path, project_name: str) -> Path | None:
     """Locate the project's main .cpy entry point."""
@@ -837,7 +873,7 @@ def run_script(global_opt: GlobalOptions, command: RunCommand):
 
     manifest = read_manifest()
     if not manifest.path:
-        style.print_error("No cpytoml found. Run 'cpm init' first.")
+        style.print_error("No cpy.toml found. Run 'cpm init' first.")
         return
 
     project_dir = manifest.path.parent
@@ -1464,7 +1500,7 @@ def list_installed_packages(global_opt: GlobalOptions, command: ListCommand):
     """List all installed packages in the current project."""
     manifest_path = find_manifest()
     if not manifest_path:
-        style.print_error("No cpytoml found. Are you in a CPM project?")
+        style.print_error("No cpy.toml found. Are you in a CPM project?")
         return
     
     project_root = manifest_path.parent
@@ -1632,6 +1668,27 @@ def _check_manifest_fields(manifest, root, fixable, issues):
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", sym):
             issues.append(_Issue("warn", f"[cpm.build] invalid export symbol: {sym!r}"))
 
+    for tool, rel in manifest.bin.items():
+        if not tool or not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", tool):
+            issues.append(_Issue(
+                "error",
+                f"[cpm.bin] invalid tool name: {tool!r}",
+                hint="letters/digits/._- only",
+            ))
+        if not rel:
+            issues.append(_Issue("error", f"[cpm.bin] '{tool}' has empty target path"))
+        elif Path(rel).is_absolute():
+            issues.append(_Issue(
+                "error",
+                f"[cpm.bin] '{tool}' target must be a project-relative path, got {rel!r}",
+            ))
+        elif not (root / rel).exists():
+            issues.append(_Issue(
+                "error",
+                f"[cpm.bin] '{tool}' target not found: {rel}",
+                hint=".cpy targets run via JIT; native binaries are executed directly",
+            ))
+
     for repo in manifest.repos:
         if not repo.startswith("https://"):
             issues.append(_Issue(
@@ -1787,7 +1844,7 @@ def validate_manifest(global_opt: GlobalOptions, command: ValidateCommand):
     started = _time.monotonic()
     manifest_path = find_manifest()
     if not manifest_path:
-        style.print_error("No cpytoml found. Are you in a CPM project?")
+        style.print_error("No cpy.toml found. Are you in a CPM project?")
         sys.exit(1)
 
     project_root = manifest_path.parent
@@ -1800,7 +1857,7 @@ def validate_manifest(global_opt: GlobalOptions, command: ValidateCommand):
     try:
         manifest = read_manifest(manifest_path)
     except Exception as e:
-        style.print_error(f"cpytoml is not valid TOML: {e}")
+        style.print_error(f"cpy.toml is not valid TOML: {e}")
         sys.exit(1)
 
     _check_manifest_fields(manifest, project_root, command.fix, issues)

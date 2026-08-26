@@ -1,6 +1,7 @@
 """Project manifest management for CPM.
 
-Handles reading and writing cpytoml, which tracks direct dependencies.
+Handles reading and writing cpy.toml, which tracks direct dependencies.
+Legacy extensionless `cpytoml` files are still discovered for compatibility.
 
 Manifest format (spec):
     [cpm]
@@ -45,7 +46,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-MANIFEST_NAME = "cpytoml"
+MANIFEST_NAME = "cpy.toml"
+LEGACY_MANIFEST_NAME = "cpytoml"
 PACKAGE_JSON_NAME = "package.json"
 
 
@@ -77,6 +79,7 @@ class PackageJson:
     extensions: ExtensionHooks = field(default_factory=ExtensionHooks)
     dependencies: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    bin: dict[str, str] = field(default_factory=dict)
     path: Path | None = None
 
 
@@ -216,7 +219,7 @@ class BuildConfig:
 
 @dataclass
 class Manifest:
-    """Represents a cpytoml project manifest."""
+    """Represents a cpy.toml project manifest."""
     name: str = ""
     version: str = "0.1.0"
     prebuilt: bool = False
@@ -225,6 +228,7 @@ class Manifest:
     llvm_version: str = ""
     repos: list[str] = field(default_factory=list)
     packages: list[PackageSpec] = field(default_factory=list)
+    bin: dict[str, str] = field(default_factory=dict)
     target: Target = field(default_factory=Target)
     build: BuildConfig = field(default_factory=BuildConfig)
     path: Path | None = None
@@ -281,6 +285,13 @@ class Manifest:
                 lines.append(f"exports = {self.build.exports}")
             lines.append("")
 
+        # Bin section (CLI tools registered by this project)
+        if self.bin:
+            lines.append("[cpm.bin]")
+            for tool, target_path in self.bin.items():
+                lines.append(f'"{tool}" = "{target_path}"')
+            lines.append("")
+
         # Target section
         has_target = self.target.os or self.target.arch or self.target.features
         if has_target:
@@ -304,7 +315,7 @@ class Manifest:
 
 
 def find_manifest(start: Path | None = None) -> Path | None:
-    """Walk up from start directory to find cpytoml."""
+    """Walk up from start directory to find cpy.toml (or legacy cpytoml)."""
     if start is None:
         start = Path.cwd()
 
@@ -313,6 +324,9 @@ def find_manifest(start: Path | None = None) -> Path | None:
         candidate = current / MANIFEST_NAME
         if candidate.exists():
             return candidate
+        legacy = current / LEGACY_MANIFEST_NAME
+        if legacy.exists():
+            return legacy
         parent = current.parent
         if parent == current:
             return None
@@ -320,7 +334,7 @@ def find_manifest(start: Path | None = None) -> Path | None:
 
 
 def read_manifest(path: Path | None = None) -> Manifest:
-    """Read a cpytoml manifest file.
+    """Read a cpy.toml manifest file.
 
     If path is None, searches upward from cwd.
     Returns an empty manifest if not found.
@@ -339,7 +353,7 @@ def read_manifest(path: Path | None = None) -> Manifest:
 
 
 def write_manifest(manifest: Manifest) -> Path:
-    """Write manifest to its path. Creates cpytoml in cwd if no path set."""
+    """Write manifest to its path. Creates cpy.toml in cwd if no path set."""
     if manifest.path is None:
         manifest.path = Path.cwd() / MANIFEST_NAME
 
@@ -348,7 +362,7 @@ def write_manifest(manifest: Manifest) -> Path:
 
 
 def _parse_toml(content: str, manifest: Manifest) -> None:
-    """Minimal TOML parser for cpytoml manifests."""
+    """Minimal TOML parser for cpy.toml manifests."""
     section = ""
 
     for line in content.splitlines():
@@ -402,6 +416,9 @@ def _parse_toml(content: str, manifest: Manifest) -> None:
                     manifest.build.pic = value.strip().lower() == "true"
                 elif key == "exports":
                     manifest.build.exports = _parse_list(value)
+
+            elif section == "cpm.bin":
+                manifest.bin[key.strip('"')] = value.strip('"')
 
             elif section == "cpm.dependencies":
                 # New format: "@std/json" = "^2.0"
@@ -488,5 +505,6 @@ def read_package_json(package_dir: Path) -> PackageJson | None:
         extensions=extensions,
         dependencies=data.get('dependencies', []),
         metadata=data.get('metadata', {}),
+        bin=dict(data.get('bin', {})),
         path=package_json_path
     )

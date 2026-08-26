@@ -16,6 +16,7 @@ Modes:
 
 import hashlib
 import os
+import re
 import shutil
 import tarfile
 import zipfile
@@ -24,9 +25,104 @@ from pathlib import Path
 from . import style
 from .gethins import fetch_repo
 from .http_session import get_session
+from .manifest import read_package_json
 
 CPM_HOME = Path.home() / ".cpm"
 CACHE_DIR = CPM_HOME / "cache"
+BIN_DIR_NAME = "bin"
+
+
+def _bin_dir(project_root: Path) -> Path:
+    """Return the project-local launcher directory (<root>/.cpm/bin)."""
+    return project_root / ".cpm" / BIN_DIR_NAME
+
+
+def _shim_body(pkg_name: str, version: str, tool: str, target_abs: Path, target_rel: str) -> str:
+    """Return the shell shim source for one bin entry.
+
+    .cpy targets run through the compiler's JIT; anything else is
+    executed directly (prebuilt native binaries).
+    """
+    lines = [
+        "#!/bin/sh",
+        f"# cpm-managed {pkg_name} {tool}",
+        f"# generated for {pkg_name}@{version} ({target_rel})",
+        'TARGET="{}"'.format(target_abs),
+    ]
+    if target_rel.endswith(".cpy"):
+        lines += [
+            'if command -v cpy >/dev/null 2>&1; then',
+            '  exec cpy --jit "$TARGET" "$@"',
+            "fi",
+            'exec python3 -m cpyte --jit "$TARGET" "$@"',
+        ]
+    else:
+        lines.append('exec "$TARGET" "$@"')
+    return "\n".join(lines) + "\n"
+
+
+def register_bins(project_root: Path, pkg_name: str, version: str,
+                  module_dir: Path | None = None) -> list[str]:
+    """Create launchers in <project_root>/.cpm/bin for a package's bin entries.
+
+    Reads package.json from the installed module directory and generates a
+    POSIX shell shim per entry. Returns the list of tool names registered.
+    """
+    if module_dir is None:
+        module_dir = _module_path(project_root, pkg_name, version)
+
+    pkg_json = read_package_json(module_dir)
+    if not pkg_json or not pkg_json.bin:
+        return []
+
+    bin_dir = _bin_dir(project_root)
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    registered = []
+    for tool, target_rel in pkg_json.bin.items():
+        tool = tool.strip()
+        target = (module_dir / target_rel).resolve()
+        if not tool or not target.exists():
+            style.print_warning(
+                f"  skipping bin '{tool}' of {pkg_name}: missing target '{target_rel}'")
+            continue
+
+        safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", tool)
+        shim = bin_dir / safe_name
+        shim.write_text(_shim_body(pkg_name, version, safe_name, target, target_rel))
+        shim.chmod(0o755)
+        registered.append(safe_name)
+        style.print_verbose(f"  + {safe_name} -> {target_rel}")
+
+    return registered
+
+
+def _unregister_bins(project_root: Path, pkg_name: str) -> int:
+    """Remove all shims in .cpm/bin owned by pkg_name. Returns count removed."""
+    bin_dir = _bin_dir(project_root)
+    if not bin_dir.is_dir():
+        return 0
+
+    marker = f"# cpm-managed {pkg_name} "
+    removed = 0
+    for shim in bin_dir.iterdir():
+        if not shim.is_file():
+            continue
+        try:
+            head = shim.read_text().splitlines()[:2]
+        except OSError:
+            continue
+        if head and head[1] == marker + shim.name:
+            shim.unlink()
+            removed += 1
+    return removed
+
+
+def _print_bin_hint(registered: list[str]) -> None:
+    if registered:
+        style.print_info(
+            f"Registered CLI tools: {', '.join(registered)}\n"
+            f"  Add to PATH to use directly: export PATH=\"$PATH:{_bin_dir(Path.cwd())}\"")
 
 
 def _ensure_cache_dir():
@@ -203,6 +299,7 @@ def execute_get(inst: dict, project_root: Path, prebuilt: bool = False,
     if not no_cache and checksum and _is_cached(name, version, checksum):
         style.print_verbose(f"  {name}@{version} found in cache, installing...")
         _install_from_cache(project_root, name, version)
+        _register_bins(project_root, name, version)
         style.print_installed(name, version, "source", cached=True)
         return
 
@@ -226,6 +323,8 @@ def execute_get(inst: dict, project_root: Path, prebuilt: bool = False,
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(cache, target)
 
+    _register_bins(project_root, name, version)
+
     mode = "prebuilt" if prebuilt else ("sef" if sef else "source")
     style.print_installed(name, version, mode)
 
@@ -239,8 +338,11 @@ def execute_remove(inst: dict, project_root: Path) -> None:
         style.print_warning(f"{name} not installed, skipping")
         return
 
+    removed_bins = _unregister_bins(project_root, name)
     shutil.rmtree(target)
     style.print_removed(name)
+    if removed_bins:
+        style.print_verbose(f"  removed {removed_bins} CLI launcher(s) for {name}")
 
 
 def execute(
@@ -309,3 +411,9 @@ def execute(
             style.print_step(i, total, f"SKIP unknown instruction: {inst}")
 
     style.print_success(f"\nDone. {total} instruction(s) executed.")
+
+    bin_dir = _bin_dir(project_root)
+    if bin_dir.is_dir() and any(bin_dir.iterdir()):
+        style.print_info(
+            f"CLI launchers in {bin_dir}\n"
+            '  Add to PATH: export PATH="$PATH:' + str(bin_dir) + '"')
