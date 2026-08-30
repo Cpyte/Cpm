@@ -61,6 +61,45 @@ def _shim_body(pkg_name: str, version: str, tool: str, target_abs: Path, target_
     return "\n".join(lines) + "\n"
 
 
+def print_installed_capabilities(pkg_name: str, version: str,
+                                 module_dir: Path | None = None,
+                                 project_root: Path | None = None) -> None:
+    """Print the language surface a package adds when installed.
+
+    Reads package.json from the installed module and reports capabilities
+    (keywords, operators, tags, macros, custom types) the compiler gains.
+    """
+    if module_dir is None:
+        if project_root is None:
+            return
+        module_dir = _module_path(project_root, pkg_name, version)
+
+    pkg_json = read_package_json(module_dir)
+    if not pkg_json:
+        return
+    caps = pkg_json.capabilities
+    sections = [
+        ("keywords", caps.keywords),
+        ("operators", caps.operators),
+        ("tags", caps.tags),
+        ("macros", caps.macros),
+        ("custom types", caps.custom_types),
+    ]
+    shown = [(label, items) for label, items in sections if items]
+    if shown:
+        _print_capability_block(pkg_name, version, shown)
+
+
+def _print_capability_block(pkg_name: str, version: str, shown) -> None:
+    if not shown:
+        return
+    header = f"{pkg_name}@{version} adds to the language:"
+    lines = [header]
+    for label, items in shown:
+        lines.append(f"    {label + ':' :<14} {', '.join(items)}")
+    style.print_info("\n".join(lines))
+
+
 def register_bins(project_root: Path, pkg_name: str, version: str,
                   module_dir: Path | None = None) -> list[str]:
     """Create launchers in <project_root>/.cpm/bin for a package's bin entries.
@@ -299,7 +338,8 @@ def execute_get(inst: dict, project_root: Path, prebuilt: bool = False,
     if not no_cache and checksum and _is_cached(name, version, checksum):
         style.print_verbose(f"  {name}@{version} found in cache, installing...")
         _install_from_cache(project_root, name, version)
-        _register_bins(project_root, name, version)
+        register_bins(project_root, name, version)
+        print_installed_capabilities(name, version, project_root=project_root)
         style.print_installed(name, version, "source", cached=True)
         return
 
@@ -323,7 +363,8 @@ def execute_get(inst: dict, project_root: Path, prebuilt: bool = False,
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(cache, target)
 
-    _register_bins(project_root, name, version)
+    register_bins(project_root, name, version)
+    print_installed_capabilities(name, version, project_root=project_root)
 
     mode = "prebuilt" if prebuilt else ("sef" if sef else "source")
     style.print_installed(name, version, mode)

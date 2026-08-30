@@ -53,6 +53,20 @@ metadata files to know about:
 - **`metadata`** — free-form; `description` and `keywords` inside
   `metadata.keywords` feed registry search.
 
+On install, CPM prints the language surface a package adds:
+
+```
+@demo/cap@1.0.0 adds to the language:
+    keywords:       await, stream
+    operators:      |>, <|>
+    macros:         async_def
+    custom types:   Stream, Future
+```
+
+`metadata.description` and `metadata.keywords` feed registry search, and the
+`capabilities` map is exposed by the registry's metadata/search responses so
+`cpm info` and `cpm search` can show them too.
+
 ## CLI launchers (`bin`)
 
 Packages can ship command-line tools, pip console-scripts style.

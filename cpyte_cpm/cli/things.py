@@ -39,7 +39,14 @@ from cpyte_cpm.cli.commands import (
 from .. import compiler as cpyte_toolchain
 from . import auth as auth_store
 from . import style
-from .executor import _bin_dir, _module_path, _shim_body, execute, register_bins
+from .executor import (
+    _bin_dir,
+    _module_path,
+    _shim_body,
+    execute,
+    print_installed_capabilities,
+    register_bins,
+)
 from .gethins import fetch_group, fetch_repo_multi, find_package_metadata
 from .lockfile import (
     LockEntry,
@@ -595,6 +602,8 @@ def install_local_deps(global_opt: GlobalOptions, command: LocalInstallCommand):
     shutil.copytree(local_path, target)
 
     style.print_installed(name, version, "local")
+
+    print_installed_capabilities(name, version, module_dir=target)
 
     # Register CLI launchers declared in package.json
     registered = register_bins(project_root, name, version, module_dir=target)
@@ -1385,6 +1394,14 @@ def search_packages(global_opt: GlobalOptions, command: SearchCommand):
         for r in remote_results:
             marker = " (installed)" if any(l["name"] == r["name"] for l in local_results) else ""
             style.print_info(f"  {style.print_package(r['name'], r['latest'])} by {r['owner']}{marker}")
+            caps = r.get('capabilities') or {}
+            if caps and any(caps.values()):
+                kw = caps.get('keywords') or []
+                ops = caps.get('operators') or []
+                style.print_verbose(
+                    f"      keywords: {', '.join(kw)}" if kw else "",
+                    f"      operators: {', '.join(ops)}" if ops else "",
+                )
 
     if not local_results and not remote_results:
         style.print_warning(f"No packages found matching '{command.query}'")
@@ -1438,6 +1455,16 @@ def show_package_info(global_opt: GlobalOptions, command: InfoCommand):
             
             if metadata.get('no_download'):
                 style.print_info("  Note: Metadata-only package (no downloadable content)")
+
+            caps = metadata.get('capabilities') or {}
+            if caps and any(caps.values()):
+                style.print_header("Language capabilities")
+                for label, key in (("Keywords", "keywords"), ("Operators", "operators"),
+                                   ("Tags", "tags"), ("Macros", "macros"),
+                                   ("Custom types", "custom_types")):
+                    items = caps.get(key) or []
+                    if items:
+                        style.print_info(f"  {label}: {', '.join(items)}")
         else:
             style.print_warning("Package not found in registry")
     except Exception as e:

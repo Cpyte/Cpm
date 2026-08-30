@@ -157,6 +157,35 @@ class TestUnregisterBins:
 
 
 # ---------------------------------------------------------------------------
+# capabilities banner
+# ---------------------------------------------------------------------------
+
+class TestInstalledCapabilities:
+    def test_banner_shows_surface(self, tmp_path, messages):
+        mod = _make_installed_pkg(tmp_path, bins={})
+        (mod / "package.json").write_text(json.dumps({
+            "name": "@std/tool", "version": "1.0",
+            "capabilities": {
+                "keywords": ["await"], "operators": ["<|>"],
+                "tags": ["@async"], "macros": ["m1"],
+                "custom_types": ["Result"],
+            },
+        }))
+        executor.print_installed_capabilities("@std/tool", "1.0", module_dir=mod)
+        texts = [t for _, t in messages]
+        joined = "\n".join(texts)
+        assert "adds to the language" in joined
+        assert "keywords:      await" in joined
+        assert "operators:     <|>" in joined
+        assert "custom types:  Result" in joined
+
+    def test_no_capabilities_no_output(self, tmp_path, messages):
+        mod = _make_installed_pkg(tmp_path, bins={})
+        executor.print_installed_capabilities("@std/tool", "1.0", module_dir=mod)
+        assert messages == []
+
+
+# ---------------------------------------------------------------------------
 # validate integration
 # ---------------------------------------------------------------------------
 

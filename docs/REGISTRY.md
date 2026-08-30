@@ -51,8 +51,10 @@ $ cpm search json                 # or: GET /search?q=json&page=2&per_page=20
 ```
 
 Matches package names, descriptions and keywords across the database **and**
-on-disk packages. Pagination via `page`/`per_page` (≤50); responses carry
-`X-Total-Count`, `X-Page`, `X-Per-Page`.
+on-disk packages. Results include a `capabilities` map (language keywords,
+operators, tags, macros, custom types) read from each package's
+`package.json`; these also feed keyword matching. Pagination via `page`/
+`per_page` (≤50); responses carry `X-Total-Count`, `X-Page`, `X-Per-Page`.
 
 ## Malware reports & quarantine
 
