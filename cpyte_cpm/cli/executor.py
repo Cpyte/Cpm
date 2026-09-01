@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import tarfile
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -31,142 +32,150 @@ CPM_HOME = Path.home() / ".cpm"
 CACHE_DIR = CPM_HOME / "cache"
 BIN_DIR_NAME = "bin"
 
+# Top-level entries in tarballs that are never the package root.
+_IGNORED_ROOT_ENTRIES = {".", "./", "__MACOSX"}
+
+
+def _is_junk(name: str) -> bool:
+    """True for macOS/editor metadata files that should never be installed."""
+    base = os.path.basename(name.rstrip("/"))
+    return (
+        base == ".DS_Store"
+        or base.startswith("._")
+        or base == "._."
+        or base == "__MACOSX"
+    )
+
 
 def _bin_dir(project_root: Path) -> Path:
     """Return the project-local launcher directory (<root>/.cpm/bin)."""
     return project_root / ".cpm" / BIN_DIR_NAME
 
 
-def _shim_body(pkg_name: str, version: str, tool: str, target_abs: Path, target_rel: str) -> str:
-    """Return the shell shim source for one bin entry.
+def _module_path(project_root: Path, name: str, version: str) -> Path:
+    """Return the project-local install directory for a specific package version."""
+    return project_root / ".cpm" / "modules" / name / version
 
-    .cpy targets run through the compiler's JIT; anything else is
-    executed directly (prebuilt native binaries).
+
+def _extract(archive_path: Path, dest: Path) -> None:
+    """Extract a tar.gz / bz2 / tar / zip archive into dest, normalized.
+
+    The extracted tree is hoisted so that a single top-level directory in
+    the archive (e.g. ``json/`` inside ``@std/json-1.0.tar.gz``) is merged
+    into ``dest`` itself. The result is always a flat package layout under
+    ``dest`` with no stray archive file or doubled nested root.
     """
-    lines = [
-        "#!/bin/sh",
-        f"# cpm-managed {pkg_name} {tool}",
-        f"# generated for {pkg_name}@{version} ({target_rel})",
-        'TARGET="{}"'.format(target_abs),
-    ]
-    if target_rel.endswith(".cpy"):
-        lines += [
-            'if command -v cpy >/dev/null 2>&1; then',
-            '  exec cpy --jit "$TARGET" "$@"',
-            "fi",
-            'exec python3 -m cpyte --jit "$TARGET" "$@"',
-        ]
+    dest.mkdir(parents=True, exist_ok=True)
+    name = archive_path.name
+
+    if name.endswith((".tar.gz", ".tgz", ".tar.bz2", ".tar")):
+        mode = "r:gz" if name.endswith((".tar.gz", ".tgz")) else (
+            "r:bz2" if name.endswith(".tar.bz2") else "r")
+        archive = tarfile.open(archive_path, mode)
+        with archive:
+            _extract_tar(archive, dest, name)
+    elif name.endswith(".zip"):
+        with zipfile.ZipFile(archive_path, "r") as zf:
+            _extract_bag(zf.namelist(), lambda m: zf.read(m), dest)
     else:
-        lines.append('exec "$TARGET" "$@"')
-    return "\n".join(lines) + "\n"
+        # Raw file (e.g. .ll, .bc, .cpy) — copy directly
+        shutil.copy2(archive_path, dest / name)
 
 
-def print_installed_capabilities(pkg_name: str, version: str,
-                                 module_dir: Path | None = None,
-                                 project_root: Path | None = None) -> None:
-    """Print the language surface a package adds when installed.
+def _extract_tar(archive, dest: Path, name: str) -> None:
+    with tempfile.TemporaryDirectory(prefix=f"cpm-x-{name}-") as tmp:
+        tmpdir = Path(tmp)
+        members = archive.getmembers()
+        wanted = []
+        for m in members:
+            m.name = _strip_leading_dot(m.name)
+            if _member_is_junk(m):
+                continue
+            wanted.append(m)
+        archive.extractall(tmpdir, members=wanted)
+        _hoist(tmpdir, dest)
 
-    Reads package.json from the installed module and reports capabilities
-    (keywords, operators, tags, macros, custom types) the compiler gains.
+
+def _strip_leading_dot(name: str) -> str:
+    """Remove a single leading './' or abs-leading slash from a member path."""
+    n = name.lstrip("/")
+    while n.startswith("./"):
+        n = n[2:]
+    return n or "."
+
+
+def _member_is_junk(member) -> bool:
+    """True if a tar member is macOS/editor metadata (recursively)."""
+    for part in member.name.split("/"):
+        if part == ".DS_Store" or part == "__MACOSX" or part.startswith("._"):
+            return True
+    return False
+
+
+def _extract_bag(names, read, dest: Path) -> None:
+    with tempfile.TemporaryDirectory(prefix="cpm-x-zip-") as tmp:
+        tmpdir = Path(tmp)
+        for m in names:
+            target = tmpdir / m
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if m.endswith("/"):
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.write_bytes(read(m))
+        _hoist(tmpdir, dest)
+
+
+def _top_entries(root: Path) -> list[Path]:
+    """Top-level children of root excluding junk remove-if-present roots."""
+    entries = [p for p in root.iterdir()
+               if p.name not in _IGNORED_ROOT_ENTRIES and not _is_junk(p.name)]
+    return entries
+
+
+def _shallow_copy_tree(src_dir: Path, dest: Path) -> None:
+    """Copy every child of src_dir into dest, flattening a single root dir."""
+    entries = _top_entries(src_dir)
+    if len(entries) == 1 and entries[0].is_dir():
+        src = entries[0]
+    else:
+        src = src_dir
+    dest.mkdir(parents=True, exist_ok=True)
+    for child in src.iterdir():
+        if _is_junk(child.name):
+            continue
+        target = dest / child.name
+        if target.exists():
+            if target.is_dir() and child.is_dir():
+                shutil.copytree(child, target, dirs_exist_ok=True)
+                continue
+            if target.is_file():
+                target.unlink()
+        shutil.move(str(child), str(target))
+
+
+def _hoist(tmpdir: Path, dest: Path) -> None:
+    """Move a normalized, flattened tree from tmpdir into dest.
+
+    If extraction produced exactly one top-level directory, its children are
+    merged directly into dest (the archive's root wrapper is dropped).
+    macOS/editor metadata files are skipped.
     """
-    if module_dir is None:
-        if project_root is None:
-            return
-        module_dir = _module_path(project_root, pkg_name, version)
-
-    pkg_json = read_package_json(module_dir)
-    if not pkg_json:
-        return
-    caps = pkg_json.capabilities
-    sections = [
-        ("keywords", caps.keywords),
-        ("operators", caps.operators),
-        ("tags", caps.tags),
-        ("macros", caps.macros),
-        ("custom types", caps.custom_types),
-    ]
-    shown = [(label, items) for label, items in sections if items]
-    if shown:
-        _print_capability_block(pkg_name, version, shown)
-
-
-def _print_capability_block(pkg_name: str, version: str, shown) -> None:
-    if not shown:
-        return
-    header = f"{pkg_name}@{version} adds to the language:"
-    lines = [header]
-    for label, items in shown:
-        lines.append(f"    {label + ':' :<14} {', '.join(items)}")
-    style.print_info("\n".join(lines))
-
-
-def register_bins(project_root: Path, pkg_name: str, version: str,
-                  module_dir: Path | None = None) -> list[str]:
-    """Create launchers in <project_root>/.cpm/bin for a package's bin entries.
-
-    Reads package.json from the installed module directory and generates a
-    POSIX shell shim per entry. Returns the list of tool names registered.
-    """
-    if module_dir is None:
-        module_dir = _module_path(project_root, pkg_name, version)
-
-    pkg_json = read_package_json(module_dir)
-    if not pkg_json or not pkg_json.bin:
-        return []
-
-    bin_dir = _bin_dir(project_root)
-    bin_dir.mkdir(parents=True, exist_ok=True)
-
-    registered = []
-    for tool, target_rel in pkg_json.bin.items():
-        tool = tool.strip()
-        target = (module_dir / target_rel).resolve()
-        if not tool or not target.exists():
-            style.print_warning(
-                f"  skipping bin '{tool}' of {pkg_name}: missing target '{target_rel}'")
+    entries = _top_entries(tmpdir)
+    if len(entries) == 1 and entries[0].is_dir():
+        src = entries[0]
+    else:
+        src = tmpdir
+    for child in src.iterdir():
+        if _is_junk(child.name):
             continue
-
-        safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", tool)
-        shim = bin_dir / safe_name
-        shim.write_text(_shim_body(pkg_name, version, safe_name, target, target_rel))
-        shim.chmod(0o755)
-        registered.append(safe_name)
-        style.print_verbose(f"  + {safe_name} -> {target_rel}")
-
-    return registered
-
-
-def _unregister_bins(project_root: Path, pkg_name: str) -> int:
-    """Remove all shims in .cpm/bin owned by pkg_name. Returns count removed."""
-    bin_dir = _bin_dir(project_root)
-    if not bin_dir.is_dir():
-        return 0
-
-    marker = f"# cpm-managed {pkg_name} "
-    removed = 0
-    for shim in bin_dir.iterdir():
-        if not shim.is_file():
-            continue
-        try:
-            head = shim.read_text().splitlines()[:2]
-        except OSError:
-            continue
-        if head and head[1] == marker + shim.name:
-            shim.unlink()
-            removed += 1
-    return removed
-
-
-def _print_bin_hint(registered: list[str]) -> None:
-    if registered:
-        style.print_info(
-            f"Registered CLI tools: {', '.join(registered)}\n"
-            f"  Add to PATH to use directly: export PATH=\"$PATH:{_bin_dir(Path.cwd())}\"")
-
-
-def _ensure_cache_dir():
-    """Create CPM cache directory if it doesn't exist."""
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        target = dest / child.name
+        if target.exists():
+            if target.is_dir() and child.is_dir():
+                shutil.copytree(child, target, dirs_exist_ok=True)
+                continue
+            if target.is_file():
+                target.unlink()
+        shutil.move(str(child), str(target))
 
 
 def _cache_path(name: str, version: str) -> Path:
@@ -174,10 +183,39 @@ def _cache_path(name: str, version: str) -> Path:
     return CACHE_DIR / name / version
 
 
-def _module_path(project_root: Path, name: str, version: str) -> Path:
-    """Return the project-local install directory for a specific package version."""
-    return project_root / ".cpm" / "modules" / name / version
+def _ensure_cache_dir() -> None:
+    """Create CPM cache directory if it doesn't exist."""
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+
+def _install_from_cache(project_root: Path, name: str, version: str) -> None:
+    """Copy a cached archive into the project modules directory and extract."""
+    cache = _cache_path(name, version)
+    target = _module_path(project_root, name, version)
+
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True, exist_ok=True)
+
+    # Extract a real archive (matching the extensions handled by _extract).
+    # Scan the cache dir in a deterministic order so the archive file is
+    # chosen over extracted package files sitting alongside it.
+    match = None
+    for f in sorted(cache.iterdir(), key=lambda p: p.name):
+        if not f.is_file() or _is_junk(f.name):
+            continue
+        fname = f.name.lower()
+        if fname.endswith((".tar.gz", ".tgz", ".tar.bz2", ".tar", ".zip")):
+            match = f
+            break
+    if match:
+        _extract(match, target)
+        return
+
+    # No archive found — cache holds only extracted directories.
+    for entry in cache.iterdir():
+        if entry.is_dir() and not _is_junk(entry.name):
+            _shallow_copy_tree(entry, target)
 
 def calculate_checksum(file_path: str, algorithm: str = "sha256") -> str:
     """Calculate checksum of a file."""
@@ -214,49 +252,6 @@ def _download(url: str, dest: Path) -> int:
     return size
 
 
-def _extract(archive_path: Path, dest: Path) -> None:
-    """Extract a tar.gz or zip archive into dest."""
-    dest.mkdir(parents=True, exist_ok=True)
-    name = archive_path.name
-    if name.endswith(".tar.gz") or name.endswith(".tgz"):
-        with tarfile.open(archive_path, "r:gz") as tar:
-            # Check if archive contains a single root directory
-            members = tar.getmembers()
-            if len(members) > 0:
-                # Get all top-level paths
-                top_level = set()
-                for member in members:
-                    # Split the path and get the first component
-                    parts = member.name.split('/')
-                    if len(parts) > 0:
-                        top_level.add(parts[0])
-                # If there's only one top-level directory, extract its contents
-                if len(top_level) == 1:
-                    root_dir = top_level.pop()
-                    # Extract contents of the single directory
-                    for member in members:
-                        if member.name.startswith(root_dir + '/'):
-                            # Strip the root directory
-                            member.name = member.name[len(root_dir)+1:]
-                            if member.name:  # Skip empty names
-                                tar.extract(member, dest)
-                    return
-            tar.extractall(dest)
-    elif name.endswith(".tar.bz2"):
-        with tarfile.open(archive_path, "r:bz2") as tar:
-            tar.extractall(dest)
-    elif name.endswith(".tar"):
-        with tarfile.open(archive_path, "r") as tar:
-            tar.extractall(dest)
-    elif name.endswith(".zip"):
-        with zipfile.ZipFile(archive_path, "r") as zf:
-            zf.extractall(dest)
-    else:
-        # Raw file (e.g. .ll, .bc, .cpy) — copy directly
-        dest.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(archive_path, dest / name)
-
-
 def _is_cached(name: str, version: str, checksum: str) -> bool:
     """Check if a package is already in cache with matching checksum."""
     cache = _cache_path(name, version)
@@ -273,39 +268,118 @@ def _is_cached(name: str, version: str, checksum: str) -> bool:
     return False
 
 
-def _install_from_cache(project_root: Path, name: str, version: str) -> None:
-    """Copy a cached archive into the project modules directory and extract."""
-    cache = _cache_path(name, version)
-    target = _module_path(project_root, name, version)
+def _shim_body(pkg_name: str, version: str, tool: str, target_abs: Path, target_rel: str) -> str:
+    """Return the shell shim source for one bin entry.
 
-    if target.exists():
-        shutil.rmtree(target)
+    .cpy targets run through the compiler's JIT; anything else is
+    executed directly (prebuilt native binaries).
+    """
+    lines = [
+        "#!/bin/sh",
+        f"# cpm-managed {pkg_name} {tool}",
+        f"# generated for {pkg_name}@{version} ({target_rel})",
+        'TARGET="{}"'.format(target_abs),
+    ]
+    if target_rel.endswith(".cpy"):
+        lines += [
+            'if command -v cpy >/dev/null 2>&1; then',
+            '  exec cpy --jit "$TARGET" "$@"',
+            "fi",
+            'exec python3 -m cpyte --jit "$TARGET" "$@"',
+        ]
+    else:
+        lines.append('exec "$TARGET" "$@"')
+    return "\n".join(lines) + "\n"
 
-    for f in cache.iterdir():
-        if f.is_file():
-            _extract(f, target)
+
+def register_bins(project_root: Path, pkg_name: str, version: str,
+                  module_dir: Path | None = None) -> list[str]:
+    """Create launchers in <project_root>/.cpm/bin for a package's bin entries."""
+    if module_dir is None:
+        module_dir = _module_path(project_root, pkg_name, version)
+
+    pkg_json = read_package_json(module_dir)
+    if not pkg_json or not pkg_json.bin:
+        return []
+
+    bin_dir = _bin_dir(project_root)
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    registered = []
+    for tool, target_rel in pkg_json.bin.items():
+        tool = tool.strip()
+        target = (module_dir / target_rel).resolve()
+        if not tool or not target.exists():
+            style.print_warning(
+                f"  skipping bin '{tool}' of {pkg_name}: missing target '{target_rel}'")
+            continue
+        safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", tool)
+        shim = bin_dir / safe_name
+        shim.write_text(_shim_body(pkg_name, version, safe_name, target, target_rel))
+        shim.chmod(0o755)
+        registered.append(safe_name)
+        style.print_verbose(f"  + {safe_name} -> {target_rel}")
+    return registered
+
+
+def _unregister_bins(project_root: Path, pkg_name: str) -> int:
+    """Remove all shims in .cpm/bin owned by pkg_name. Returns count removed."""
+    bin_dir = _bin_dir(project_root)
+    if not bin_dir.is_dir():
+        return 0
+
+    marker = f"# cpm-managed {pkg_name} "
+    removed = 0
+    for shim in bin_dir.iterdir():
+        if not shim.is_file():
+            continue
+        try:
+            head = shim.read_text().splitlines()[:2]
+        except OSError:
+            continue
+        if head and head[1] == marker + shim.name:
+            shim.unlink()
+            removed += 1
+    return removed
+
+
+def print_installed_capabilities(pkg_name: str, version: str,
+                                 module_dir: Path | None = None,
+                                 project_root: Path | None = None) -> None:
+    """Print the language surface a package adds when installed."""
+    if module_dir is None:
+        if project_root is None:
             return
+        module_dir = _module_path(project_root, pkg_name, version)
+
+    pkg_json = read_package_json(module_dir)
+    if not pkg_json:
+        return
+    caps = pkg_json.capabilities
+    sections = [
+        ("keywords", caps.keywords),
+        ("operators", caps.operators),
+        ("tags", caps.tags),
+        ("macros", caps.macros),
+        ("custom types", caps.custom_types),
+    ]
+    shown = [(label, items) for label, items in sections if items]
+    if shown:
+        _print_capability_block(pkg_name, version, shown)
+
+
+def _print_capability_block(pkg_name: str, version: str, shown) -> None:
+    if not shown:
+        return
+    lines = [f"{pkg_name}@{version} adds to the language:"]
+    for label, items in shown:
+        lines.append(f"    {label + ':' :<14} {', '.join(items)}")
+    style.print_info("\n".join(lines))
 
 
 def execute_get(inst: dict, project_root: Path, prebuilt: bool = False,
                 force: bool = False, no_cache: bool = False, sef: bool = False) -> None:
-    """Execute a single GET instruction.
-
-    Parameters
-    ----------
-    inst:
-        Instruction dict with GET, url, version, checksum.
-    project_root:
-        Project root directory (where .cpm/modules/ lives).
-    prebuilt:
-        If True, fetch prebuilt .ll from registry.
-    force:
-        If True, reinstall even if already installed.
-    no_cache:
-        If True, skip cache and re-download.
-    sef:
-        If True, this package is a Scorpion SEF artifact (for display).
-    """
+    """Execute a single GET instruction."""
     name = inst["GET"]
     url = inst.get("url")
     version = inst.get("version", "latest")
@@ -327,8 +401,8 @@ def execute_get(inst: dict, project_root: Path, prebuilt: bool = False,
         style.print_verbose(f"  {name}@{version} has no downloadable file (registry metadata only)")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.mkdir(parents=True, exist_ok=True)
-        # Create a placeholder file
-        (target / ".placeholder").write_text(f"Package {name}@{version} - registry metadata only, no downloadable file")
+        (target / ".placeholder").write_text(
+            f"Package {name}@{version} - registry metadata only, no downloadable file")
         style.print_installed(name, version, "placeholder")
         return
 
@@ -355,13 +429,12 @@ def execute_get(inst: dict, project_root: Path, prebuilt: bool = False,
         style.print_verbose("  verifying checksum...")
         _verify_checksum(str(dest), checksum)
 
-    # Extract to cache first
+    # Extract into cache (normalized, flat layout)
     style.print_verbose(f"  extracting {name}@{version}...")
     _extract(dest, cache)
 
-    # Install from cache to project
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(cache, target)
+    # Install from cache to project (copies extracted contents only)
+    _install_from_cache(project_root, name, version)
 
     register_bins(project_root, name, version)
     print_installed_capabilities(name, version, project_root=project_root)
@@ -396,33 +469,7 @@ def execute(
     no_cache: bool = False,
     sef: bool = False,
 ) -> None:
-    """Execute a flat instruction stream.
-
-    Pipeline stage: Execute
-    This is the final stage — instructions are consumed and filesystem
-    operations are performed.
-
-    Parameters
-    ----------
-    instructions:
-        Flat list of dicts from deduplicator(), e.g.
-        [{"GET": "D", "url": "...", ...}, {"GET": "B", ...}]
-    project_root:
-        Project root directory (where .cpm/modules/ lives).
-    repo:
-        Repository URL. If provided, missing metadata (url, checksum)
-        will be fetched during execution.
-    ver:
-        Package version to resolve against.
-    prebuilt:
-        If True, registry serves prebuilt artifacts (.ll).
-    force:
-        If True, reinstall even if already installed.
-    no_cache:
-        If True, skip cache and re-download.
-    sef:
-        If True, packages are Scorpion SEF artifacts.
-    """
+    """Execute a flat instruction stream."""
     _ensure_cache_dir()
 
     total = len(instructions)
@@ -430,7 +477,6 @@ def execute(
     style.print_header(f"Executing {total} instruction(s) [{mode}]")
 
     for i, inst in enumerate(instructions, 1):
-        # If metadata is missing from instruction, fetch it
         if "GET" in inst and "url" not in inst:
             name = inst["GET"]
             if repo is None:
@@ -444,7 +490,8 @@ def execute(
 
         if "GET" in inst:
             style.print_step(i, total, f"GET {inst['GET']}")
-            execute_get(inst, project_root, prebuilt=prebuilt, force=force, no_cache=no_cache, sef=sef)
+            execute_get(inst, project_root, prebuilt=prebuilt, force=force,
+                        no_cache=no_cache, sef=sef)
         elif "REMOVE" in inst:
             style.print_step(i, total, f"REMOVE {inst['REMOVE']}")
             execute_remove(inst, project_root)
