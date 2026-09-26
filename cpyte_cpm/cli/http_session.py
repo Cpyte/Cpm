@@ -27,7 +27,7 @@ def get_session() -> rq.Session:
         # Configure connection pooling
         adapter = HTTPAdapter(
             pool_connections=10,  # Number of connection pools
-            pool_maxsize=10,      # Max connections per pool
+            pool_maxsize=10,  # Max connections per pool
             max_retries=Retry(
                 total=3,
                 backoff_factor=0.5,
@@ -38,10 +38,12 @@ def get_session() -> rq.Session:
         _session.mount("https://", adapter)
 
         # Set default headers for better performance
-        _session.headers.update({
-            "Accept-Encoding": "gzip, deflate",
-            "Connection": "keep-alive",
-        })
+        _session.headers.update(
+            {
+                "Accept-Encoding": "gzip, deflate",
+                "Connection": "keep-alive",
+            }
+        )
 
     return _session
 

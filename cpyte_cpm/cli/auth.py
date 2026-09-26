@@ -66,9 +66,7 @@ def _dumps(data: dict) -> str:
 
 def auth_path() -> Path:
     """Path of the credentials file (respects XDG_CONFIG_HOME)."""
-    config_home = os.environ.get("XDG_CONFIG_HOME") or str(
-        Path.home() / ".config"
-    )
+    config_home = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
     return Path(config_home) / "cpm" / "auth.toml"
 
 

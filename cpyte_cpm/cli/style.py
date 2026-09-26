@@ -50,8 +50,10 @@ def _tty() -> bool:
 # ANSI codes
 # ---------------------------------------------------------------------------
 
+
 class Color:
     """ANSI color codes."""
+
     RESET = "\033[0m" if _COLORS else ""
     BOLD = "\033[1m" if _COLORS else ""
     DIM = "\033[2m" if _COLORS else ""
@@ -78,12 +80,12 @@ class Color:
 
 
 # Glyphs (ASCII, no emoji)
-GLYPH_OK = "\u2713"      # ✓
-GLYPH_BAD = "\u2717"     # ✗
-GLYPH_WARN = "\u26a0"    # ⚠
-GLYPH_ARROW = "\u25b8"   # ▸
-GLYPH_DOT = "\u25cf"     # ●
-GLYPH_SPIN = "\u25d0"    # ◐
+GLYPH_OK = "\u2713"  # ✓
+GLYPH_BAD = "\u2717"  # ✗
+GLYPH_WARN = "\u26a0"  # ⚠
+GLYPH_ARROW = "\u25b8"  # ▸
+GLYPH_DOT = "\u25cf"  # ●
+GLYPH_SPIN = "\u25d0"  # ◐
 GLYPH_CHECKBOX = "\u2610"  # ☐
 
 SPINNER_FRAMES = ["\u25d0", "\u25d3", "\u25d1", "\u25d2"]  # ◐ ◓ ◑ ◒
@@ -94,6 +96,7 @@ _SPINNER_ASCII = ["|", "/", "-", "\\"]
 # ---------------------------------------------------------------------------
 # Gradient helpers
 # ---------------------------------------------------------------------------
+
 
 def _rgb(code: int) -> tuple[int, int, int]:
     return ((code >> 16) & 0xFF, (code >> 8) & 0xFF, code & 0xFF)
@@ -111,11 +114,15 @@ def _bg(rgb: tuple[int, int, int]) -> str:
     return f"\033[48;2;{rgb[0]};{rgb[1]};{rgb[2]}m"
 
 
-def _lerp(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
+def _lerp(
+    a: tuple[int, int, int], b: tuple[int, int, int], t: float
+) -> tuple[int, int, int]:
     return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))  # type: ignore[return-value]
 
 
-def gradient(text: str, start=(0, 168, 255), end=(0, 255, 136), bold: bool = True) -> str:
+def gradient(
+    text: str, start=(0, 168, 255), end=(0, 255, 136), bold: bool = True
+) -> str:
     """Render text with a horizontal color gradient."""
     if not _COLORS or not text:
         return text
@@ -130,8 +137,13 @@ def gradient(text: str, start=(0, 168, 255), end=(0, 255, 136), bold: bool = Tru
 def rainbow(text: str) -> str:
     """Rainbow gradient text."""
     palette = [
-        (255, 51, 51), (255, 170, 51), (255, 255, 51),
-        (51, 255, 51), (51, 255, 255), (51, 102, 255), (170, 51, 255),
+        (255, 51, 51),
+        (255, 170, 51),
+        (255, 255, 51),
+        (51, 255, 51),
+        (51, 255, 255),
+        (51, 102, 255),
+        (170, 51, 255),
     ]
     out = []
     for i, ch in enumerate(text):
@@ -168,6 +180,7 @@ def is_json_mode() -> bool:
 # ---------------------------------------------------------------------------
 # Basic messages
 # ---------------------------------------------------------------------------
+
 
 def print_error(msg: str, file=sys.stderr):
     """Print an error message to stderr."""
@@ -235,12 +248,16 @@ def print_download(name: str, version: str, size: int = None):
         pkg = print_package(name, version)
         if size:
             size_str = _format_size(size)
-            print(f"  {Color.BLUE}{GLYPH_ARROW} downloading{Color.RESET} {pkg} ({size_str})...")
+            print(
+                f"  {Color.BLUE}{GLYPH_ARROW} downloading{Color.RESET} {pkg} ({size_str})..."
+            )
         else:
             print(f"  {Color.BLUE}{GLYPH_ARROW} downloading{Color.RESET} {pkg}...")
 
 
-def print_installed(name: str, version: str, mode: str = "source", cached: bool = False):
+def print_installed(
+    name: str, version: str, mode: str = "source", cached: bool = False
+):
     """Print an installed status message."""
     if not _QUIET:
         pkg = print_package(name, version)
@@ -273,7 +290,9 @@ def _format_size(size_bytes: int) -> str:
     """Format bytes to human readable string."""
     for unit in ["B", "KB", "MB", "GB"]:
         if size_bytes < 1024:
-            return f"{size_bytes:.0f}{unit}" if unit == "B" else f"{size_bytes:.1f}{unit}"
+            return (
+                f"{size_bytes:.0f}{unit}" if unit == "B" else f"{size_bytes:.1f}{unit}"
+            )
         size_bytes /= 1024
     return f"{size_bytes:.1f}TB"
 
@@ -392,7 +411,9 @@ class Spinner:
         print(f"  {Color.GREEN}{GLYPH_OK} {self.text} — done{Color.RESET}")
 
 
-def progress_bar(iterable: Iterator[Any], total: int = None, label: str = "", width: int = 24) -> Iterator[Any]:
+def progress_bar(
+    iterable: Iterator[Any], total: int = None, label: str = "", width: int = 24
+) -> Iterator[Any]:
     """Iterate with an inline progress bar. Yields items from iterable."""
     total = total or len(iterable)  # type: ignore[arg-type]
     animate = _tty()
@@ -428,6 +449,7 @@ def pulse(seconds: float = 0.15):
 # ---------------------------------------------------------------------------
 # JSON output
 # ---------------------------------------------------------------------------
+
 
 class JsonOutput:
     """Context manager for JSON output mode."""

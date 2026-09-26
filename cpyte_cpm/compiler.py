@@ -48,10 +48,12 @@ def _module_available() -> tuple[str, str]:
     """Return (version, error) for the `cpyte` Python module."""
     try:
         import cpyte
+
         version = getattr(cpyte, "__version__", "")
         if not version:
             try:
                 from importlib.metadata import version as _mv
+
                 version = _mv(COMPILER_DIST)
             except Exception:
                 version = ""
@@ -64,6 +66,7 @@ def _llvm_version() -> str:
     """Read LLVM version via llvmlite if present."""
     try:
         import llvmlite.binding as llvm
+
         v = llvm.llvm_version_info
         return f"{v[0]}.{v[1]}.{v[2]}"
     except Exception:
@@ -93,6 +96,7 @@ def detect_compiler() -> CompilerInfo:
     if version:
         try:
             import cpyte
+
             info.module_path = os.path.dirname(cpyte.__file__)
         except Exception:
             pass
@@ -108,6 +112,7 @@ def get_cpyte_version() -> str:
     """
     try:
         import cpyte
+
         v = getattr(cpyte, "__version__", "")
         if v:
             return v
@@ -115,6 +120,7 @@ def get_cpyte_version() -> str:
         pass
     try:
         from importlib.metadata import version as _mv
+
         return _mv(COMPILER_DIST)
     except Exception:
         return "2.6.0"
@@ -131,7 +137,9 @@ def compiler_command() -> list[str]:
     return [sys.executable, "-m", COMPILER_DIST]
 
 
-def run_compiler(args: list[str], cwd: Path | None = None, capture: bool = False) -> subprocess.CompletedProcess:
+def run_compiler(
+    args: list[str], cwd: Path | None = None, capture: bool = False
+) -> subprocess.CompletedProcess:
     """Run the Cpyte compiler CLI with the given args."""
     cmd = compiler_command() + args
     return subprocess.run(
@@ -228,10 +236,7 @@ _CODE_GEN_PROBES: dict[str, dict] = {
     # SEF v2 cross-compilation to RISC-V
     "scorpion": {
         "mode": "scorpion",
-        "source": (
-            "def main() -> int:\n"
-            "    return 0\n"
-        ),
+        "source": ("def main() -> int:\n    return 0\n"),
     },
 }
 
@@ -301,6 +306,7 @@ def toolchain_capabilities() -> dict:
 # Manifest validation via the compiler's own validator
 # ---------------------------------------------------------------------------
 
+
 def validate_package_json(package_dir: Path) -> tuple[bool, list[str]]:
     """Validate a package's package.json using the Cpyte compiler validator.
 
@@ -356,6 +362,7 @@ def _validate_package_json_fallback(package_dir: Path) -> tuple[bool, list[str]]
 # Toolchain diagnostics (cpm doctor)
 # ---------------------------------------------------------------------------
 
+
 def diagnose() -> dict[str, Any]:
     """Produce a structured toolchain report."""
     info = detect_compiler()
@@ -396,6 +403,7 @@ def _cpm_dir_present() -> bool:
 def _safe_read_manifest():
     try:
         from .manifest import read_manifest
+
         return read_manifest()
     except Exception:
         return None

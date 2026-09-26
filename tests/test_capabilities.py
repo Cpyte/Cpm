@@ -56,11 +56,15 @@ def test_matches_toolchain_llvm_mismatch() -> None:
 
 def test_matches_toolchain_missing_toolchain() -> None:
     required = {"compiler": ">=2.7.0"}
-    assert _matches_toolchain(required, {}) == (False, "requires compiler >=2.7.0 (toolchain not detected)")
+    assert _matches_toolchain(required, {}) == (
+        False,
+        "requires compiler >=2.7.0 (toolchain not detected)",
+    )
 
 
 def test_matches_toolchain_unknown_codegen_feature_fails_loudly(monkeypatch) -> None:
     from cpyte_cpm.cli import sat
+
     monkeypatch.setattr(sat, "has_codegen_feature", lambda f: False)
     required = {"codegen": ["definitely_not_a_feature_xyz"]}
     ok, reason = _matches_toolchain(required, {"compiler": "2.7.2"})
@@ -70,6 +74,7 @@ def test_matches_toolchain_unknown_codegen_feature_fails_loudly(monkeypatch) -> 
 
 def test_matches_toolchain_codegen_satisfied(monkeypatch) -> None:
     from cpyte_cpm.cli import sat
+
     monkeypatch.setattr(sat, "has_codegen_feature", lambda f: True)
     required = {"codegen": ["scorpion", "setjmp"]}
     assert _matches_toolchain(required, {"compiler": "2.7.2"}) == (True, "")
@@ -77,6 +82,7 @@ def test_matches_toolchain_codegen_satisfied(monkeypatch) -> None:
 
 def test_matches_toolchain_codegen_missing(monkeypatch) -> None:
     from cpyte_cpm.cli import sat
+
     monkeypatch.setattr(sat, "has_codegen_feature", lambda f: False)
     required = {"codegen": ["scorpion"]}
     ok, reason = _matches_toolchain(required, {"compiler": "2.7.2"})
@@ -86,6 +92,7 @@ def test_matches_toolchain_codegen_missing(monkeypatch) -> None:
 
 def test_matches_toolchain_all_dimensions(monkeypatch) -> None:
     from cpyte_cpm.cli import sat
+
     monkeypatch.setattr(sat, "has_codegen_feature", lambda f: True)
     required = {"compiler": ">=2.7.0", "llvm": ">=22", "codegen": ["scorpion"]}
     detected = {"compiler": "2.7.2", "llvm": "22.1.0"}

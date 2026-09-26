@@ -24,6 +24,7 @@ from cpyte_cpm.cli.parser import parse_args
 # Helper
 # ---------------------------------------------------------------------------
 
+
 def parse(argv: list[str]) -> ParsedCLI:
     """Shorthand to parse a list of string arguments."""
     return parse_args(argv)
@@ -32,6 +33,7 @@ def parse(argv: list[str]) -> ParsedCLI:
 # ---------------------------------------------------------------------------
 # No arguments
 # ---------------------------------------------------------------------------
+
 
 class TestNoArgs:
     def test_empty_args_returns_no_command(self) -> None:
@@ -53,6 +55,7 @@ class TestNoArgs:
 # init
 # ---------------------------------------------------------------------------
 
+
 class TestInitCommand:
     def test_init(self) -> None:
         result = parse(["init"])
@@ -66,6 +69,7 @@ class TestInitCommand:
 # ---------------------------------------------------------------------------
 # add
 # ---------------------------------------------------------------------------
+
 
 class TestAddCommand:
     def test_add_single_package(self) -> None:
@@ -112,6 +116,7 @@ class TestAddCommand:
 # remove
 # ---------------------------------------------------------------------------
 
+
 class TestRemoveCommand:
     def test_remove_single_package(self) -> None:
         result = parse(["remove", "foo"])
@@ -132,6 +137,7 @@ class TestRemoveCommand:
 # install
 # ---------------------------------------------------------------------------
 
+
 class TestInstallCommand:
     def test_install(self) -> None:
         result = parse(["install"])
@@ -141,6 +147,7 @@ class TestInstallCommand:
 # ---------------------------------------------------------------------------
 # update
 # ---------------------------------------------------------------------------
+
 
 class TestUpdateCommand:
     def test_update_no_packages(self) -> None:
@@ -162,6 +169,7 @@ class TestUpdateCommand:
 # ---------------------------------------------------------------------------
 # build
 # ---------------------------------------------------------------------------
+
 
 class TestBuildCommand:
     def test_build(self) -> None:
@@ -206,6 +214,7 @@ class TestBuildCommand:
 # sef
 # ---------------------------------------------------------------------------
 
+
 class TestSefCommand:
     def test_sef_no_subcommand(self) -> None:
         result = parse(["sef"])
@@ -245,6 +254,7 @@ class TestSefCommand:
 # run
 # ---------------------------------------------------------------------------
 
+
 class TestRunCommand:
     def test_run_script_only(self) -> None:
         result = parse(["run", "test"])
@@ -273,6 +283,7 @@ class TestRunCommand:
 # exec
 # ---------------------------------------------------------------------------
 
+
 class TestExecCommand:
     def test_exec(self) -> None:
         result = parse(["exec", "scripts/run.cpy"])
@@ -295,6 +306,7 @@ class TestExecCommand:
 # doctor
 # ---------------------------------------------------------------------------
 
+
 class TestDoctorCommand:
     def test_doctor(self) -> None:
         result = parse(["doctor"])
@@ -310,6 +322,7 @@ class TestDoctorCommand:
 # --version
 # ---------------------------------------------------------------------------
 
+
 class TestVersionFlag:
     def test_version_flag_exits(self) -> None:
         with pytest.raises(SystemExit) as exc_info:
@@ -321,6 +334,7 @@ class TestVersionFlag:
 # --help
 # ---------------------------------------------------------------------------
 
+
 class TestHelpFlag:
     def test_help_flag_exits(self) -> None:
         with pytest.raises(SystemExit) as exc_info:
@@ -331,6 +345,7 @@ class TestHelpFlag:
 # ---------------------------------------------------------------------------
 # Global options
 # ---------------------------------------------------------------------------
+
 
 class TestGlobalOptions:
     def test_verbose_short(self) -> None:
@@ -380,6 +395,7 @@ class TestGlobalOptions:
 # Unknown commands
 # ---------------------------------------------------------------------------
 
+
 class TestUnknownCommand:
     def test_unknown_command_raises_error(self) -> None:
         with pytest.raises(UnknownCommandError) as exc_info:
@@ -400,6 +416,7 @@ class TestUnknownCommand:
 # ---------------------------------------------------------------------------
 # Structured result type
 # ---------------------------------------------------------------------------
+
 
 class TestParsedCLI:
     def test_parsed_cli_is_frozen(self) -> None:

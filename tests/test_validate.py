@@ -33,11 +33,7 @@ def _cmd(fix=False, strict=False):
 
 
 GOOD = '[cpm]\nname = "demo"\nversion = "1.2.3"\n[cpm.dependencies]\n# none\n'
-LOCK_OK = (
-    "[[package]]\n"
-    'name = "@std/json"\n'
-    'version = "1.1.0"\n'
-)
+LOCK_OK = '[[package]]\nname = "@std/json"\nversion = "1.1.0"\n'
 
 
 def _locked_project(tmp_path, constraint="^1.0", lock_extra="", installed=True):
@@ -51,8 +47,6 @@ def _locked_project(tmp_path, constraint="^1.0", lock_extra="", installed=True):
         (modules / "1.1.0").mkdir(parents=True)
     (proj / "cpm.lock").write_text(LOCK_OK + lock_extra)
     return proj
-
-
 
 
 @pytest.fixture(autouse=True)
@@ -71,6 +65,7 @@ def messages(monkeypatch):
     def _rec(sev):
         def _fn(msg, *a, **k):
             box.append(f"{sev}: {msg}")
+
         return _fn
 
     monkeypatch.setattr(style, "print_error", _rec("error"))
@@ -125,8 +120,7 @@ class TestValidate:
     def test_missing_build_main(self, tmp_path, messages):
         proj = _project(
             tmp_path,
-            '[cpm]\nname = "x"\nversion = "1.0"\n'
-            '[cpm.build]\nmain = "ghost.cpy"\n',
+            '[cpm]\nname = "x"\nversion = "1.0"\n[cpm.build]\nmain = "ghost.cpy"\n',
         )
         with pytest.raises(SystemExit):
             _run_project(_cmd(), proj, tmp_path)
@@ -135,8 +129,7 @@ class TestValidate:
     def test_insecure_repo_url(self, tmp_path, messages):
         proj = _project(
             tmp_path,
-            '[cpm]\nname = "x"\nversion = "1.0"\n'
-            'repos = ["http://reg.example.com"]\n',
+            '[cpm]\nname = "x"\nversion = "1.0"\nrepos = ["http://reg.example.com"]\n',
         )
         with pytest.raises(SystemExit):
             _run_project(_cmd(), proj, tmp_path)
@@ -151,7 +144,6 @@ class TestValidate:
         with pytest.raises(SystemExit):
             _run_project(_cmd(), proj, tmp_path)
         assert any("malformed version constraint" in m for m in messages)
-
 
     def _global():
         return GlobalOptions(verbose=False, quiet=False)
@@ -190,12 +182,7 @@ class TestFixes:
         assert (proj / "cpy.toml").read_text() == original
 
 
-
-LOCK_OK = (
-    "[[package]]\n"
-    'name = "@std/json"\n'
-    'version = "1.1.0"\n'
-)
+LOCK_OK = '[[package]]\nname = "@std/json"\nversion = "1.1.0"\n'
 
 
 def _locked_project(tmp_path, constraint="^1.0", lock_extra="", installed=True):
@@ -235,8 +222,11 @@ class TestLockfileChecks:
         assert any("insecure transport" in m for m in messages)
 
     def test_locked_version_not_satisfying_constraint_warns(self, tmp_path, messages):
-        proj = _locked_project(tmp_path, constraint="^2.0",
-                               lock_extra='checksum = "sha256:' + "b" * 64 + '"\n')
+        proj = _locked_project(
+            tmp_path,
+            constraint="^2.0",
+            lock_extra='checksum = "sha256:' + "b" * 64 + '"\n',
+        )
         _run_project(_cmd(), proj, tmp_path)
         joined = "\n".join(messages)
         assert "does not satisfy" in joined
@@ -252,11 +242,13 @@ class TestLockfileChecks:
         assert any("PASSED" in m for m in messages)
 
     def test_declared_but_not_installed_warns(self, tmp_path, messages):
-        proj = _locked_project(tmp_path, installed=False,
-                               lock_extra='checksum = "sha256:' + "d" * 64 + '"\n')
+        proj = _locked_project(
+            tmp_path,
+            installed=False,
+            lock_extra='checksum = "sha256:' + "d" * 64 + '"\n',
+        )
         _run_project(_cmd(), proj, tmp_path)
         assert any("not installed" in m for m in messages)
-
 
 
 class TestSecurityStrict:
@@ -306,4 +298,3 @@ class TestSecurityStrict:
         empty.mkdir()
         with pytest.raises(SystemExit):
             _run_project(_cmd(), empty, tmp_path)
-

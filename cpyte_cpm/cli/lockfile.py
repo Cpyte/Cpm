@@ -20,12 +20,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from cpyte_cpm.cli import minitoml
+
 LOCKFILE_NAME = "cpm.lock"
 
 
 @dataclass
 class LockEntry:
     """A single locked package."""
+
     name: str
     version: str
     resolved: str = ""
@@ -39,6 +42,7 @@ class LockEntry:
 @dataclass
 class Lockfile:
     """Represents a cpm.lock file."""
+
     entries: list[LockEntry] = field(default_factory=list)
     path: Path | None = None
 
@@ -86,19 +90,24 @@ class Lockfile:
         lines = ["# cpm.lock — auto-generated, do not edit manually", ""]
         for entry in self.entries:
             lines.append("[[package]]")
-            lines.append(f'name = "{entry.name}"')
-            lines.append(f'version = "{entry.version}"')
+            lines.append(f"name = {minitoml.toml_string(entry.name)}")
+            lines.append(f"version = {minitoml.toml_string(entry.version)}")
             if entry.resolved:
-                lines.append(f'resolved = "{entry.resolved}"')
+                lines.append(f"resolved = {minitoml.toml_string(entry.resolved)}")
             if entry.checksum:
-                lines.append(f'checksum = "{entry.checksum}"')
+                lines.append(f"checksum = {minitoml.toml_string(entry.checksum)}")
             if entry.dependencies:
-                deps_str = ", ".join(f'"{d}"' for d in entry.dependencies)
-                lines.append(f"dependencies = [{deps_str}]")
+                lines.append(
+                    f"dependencies = {minitoml.toml_array(entry.dependencies)}"
+                )
             if entry.llvm_version:
-                lines.append(f'llvm_version = "{entry.llvm_version}"')
+                lines.append(
+                    f"llvm_version = {minitoml.toml_string(entry.llvm_version)}"
+                )
             if entry.cpyte_version:
-                lines.append(f'cpyte_version = "{entry.cpyte_version}"')
+                lines.append(
+                    f"cpyte_version = {minitoml.toml_string(entry.cpyte_version)}"
+                )
             if entry.sef:
                 lines.append("sef = true")
             lines.append("")
@@ -153,48 +162,38 @@ def _parse_lockfile(content: str, lockfile: Lockfile) -> None:
     """Minimal TOML parser for [[package]] sections."""
     current_entry: LockEntry | None = None
 
-    for line in content.splitlines():
-        stripped = line.strip()
-
-        # Skip empty lines and comments
-        if not stripped or stripped.startswith("#"):
+    for table, _is_array, statement in minitoml.iter_statements(content):
+        if not statement:
+            # Table header: start a new entry for each [[package]] block.
+            if table == "package":
+                current_entry = LockEntry(name="", version="")
+                lockfile.entries.append(current_entry)
+            else:
+                current_entry = None
             continue
 
-        # Section header
-        if stripped == "[[package]]":
-            current_entry = LockEntry(name="", version="")
-            lockfile.entries.append(current_entry)
-            continue
-
-        if current_entry is None:
+        if current_entry is None or "=" not in statement:
             continue
 
         # key = value
-        if "=" in stripped:
-            key, _, value = stripped.partition("=")
-            key = key.strip()
-            value = value.strip()
+        key, _, value = statement.partition("=")
+        key = key.strip()
+        value = value.strip()
 
-            if key == "name":
-                current_entry.name = value.strip('"')
-            elif key == "version":
-                current_entry.version = value.strip('"')
-            elif key == "resolved":
-                current_entry.resolved = value.strip('"')
-            elif key == "checksum":
-                current_entry.checksum = value.strip('"')
-            elif key == "llvm_version":
-                current_entry.llvm_version = value.strip('"')
-            elif key == "cpyte_version":
-                current_entry.cpyte_version = value.strip('"')
-            elif key == "sef":
-                current_entry.sef = value.strip().lower() == "true"
-            elif key == "dependencies":
-                # Parse array: ["dep1", "dep2"]
-                inner = value.strip("[]")
-                if inner:
-                    current_entry.dependencies = [
-                        d.strip().strip('"')
-                        for d in inner.split(",")
-                        if d.strip()
-                    ]
+        if key == "name":
+            current_entry.name = minitoml.unquote(value)
+        elif key == "version":
+            current_entry.version = minitoml.unquote(value)
+        elif key == "resolved":
+            current_entry.resolved = minitoml.unquote(value)
+        elif key == "checksum":
+            current_entry.checksum = minitoml.unquote(value)
+        elif key == "llvm_version":
+            current_entry.llvm_version = minitoml.unquote(value)
+        elif key == "cpyte_version":
+            current_entry.cpyte_version = minitoml.unquote(value)
+        elif key == "sef":
+            current_entry.sef = value.strip().lower() == "true"
+        elif key == "dependencies":
+            # Parse array: ["dep1", "dep2"]
+            current_entry.dependencies = minitoml.parse_array(value)

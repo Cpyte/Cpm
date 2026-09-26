@@ -69,8 +69,11 @@ def _extract(archive_path: Path, dest: Path) -> None:
     name = archive_path.name
 
     if name.endswith((".tar.gz", ".tgz", ".tar.bz2", ".tar")):
-        mode = "r:gz" if name.endswith((".tar.gz", ".tgz")) else (
-            "r:bz2" if name.endswith(".tar.bz2") else "r")
+        mode = (
+            "r:gz"
+            if name.endswith((".tar.gz", ".tgz"))
+            else ("r:bz2" if name.endswith(".tar.bz2") else "r")
+        )
         archive = tarfile.open(archive_path, mode)
         with archive:
             _extract_tar(archive, dest, name)
@@ -127,8 +130,11 @@ def _extract_bag(names, read, dest: Path) -> None:
 
 def _top_entries(root: Path) -> list[Path]:
     """Top-level children of root excluding junk remove-if-present roots."""
-    entries = [p for p in root.iterdir()
-               if p.name not in _IGNORED_ROOT_ENTRIES and not _is_junk(p.name)]
+    entries = [
+        p
+        for p in root.iterdir()
+        if p.name not in _IGNORED_ROOT_ENTRIES and not _is_junk(p.name)
+    ]
     return entries
 
 
@@ -217,6 +223,7 @@ def _install_from_cache(project_root: Path, name: str, version: str) -> None:
         if entry.is_dir() and not _is_junk(entry.name):
             _shallow_copy_tree(entry, target)
 
+
 def calculate_checksum(file_path: str, algorithm: str = "sha256") -> str:
     """Calculate checksum of a file."""
     hash_func = hashlib.new(algorithm)
@@ -236,8 +243,7 @@ def _verify_checksum(file_path: str, expected: str) -> None:
     if actual_hex != expected_hex:
         os.remove(file_path)
         raise ValueError(
-            f"Checksum mismatch for {file_path}: "
-            f"expected {expected}, got {actual}"
+            f"Checksum mismatch for {file_path}: expected {expected}, got {actual}"
         )
 
 
@@ -268,7 +274,9 @@ def _is_cached(name: str, version: str, checksum: str) -> bool:
     return False
 
 
-def _shim_body(pkg_name: str, version: str, tool: str, target_abs: Path, target_rel: str) -> str:
+def _shim_body(
+    pkg_name: str, version: str, tool: str, target_abs: Path, target_rel: str
+) -> str:
     """Return the shell shim source for one bin entry.
 
     .cpy targets run through the compiler's JIT; anything else is
@@ -282,7 +290,7 @@ def _shim_body(pkg_name: str, version: str, tool: str, target_abs: Path, target_
     ]
     if target_rel.endswith(".cpy"):
         lines += [
-            'if command -v cpy >/dev/null 2>&1; then',
+            "if command -v cpy >/dev/null 2>&1; then",
             '  exec cpy --jit "$TARGET" "$@"',
             "fi",
             'exec python3 -m cpyte --jit "$TARGET" "$@"',
@@ -292,8 +300,9 @@ def _shim_body(pkg_name: str, version: str, tool: str, target_abs: Path, target_
     return "\n".join(lines) + "\n"
 
 
-def register_bins(project_root: Path, pkg_name: str, version: str,
-                  module_dir: Path | None = None) -> list[str]:
+def register_bins(
+    project_root: Path, pkg_name: str, version: str, module_dir: Path | None = None
+) -> list[str]:
     """Create launchers in <project_root>/.cpm/bin for a package's bin entries."""
     if module_dir is None:
         module_dir = _module_path(project_root, pkg_name, version)
@@ -311,7 +320,8 @@ def register_bins(project_root: Path, pkg_name: str, version: str,
         target = (module_dir / target_rel).resolve()
         if not tool or not target.exists():
             style.print_warning(
-                f"  skipping bin '{tool}' of {pkg_name}: missing target '{target_rel}'")
+                f"  skipping bin '{tool}' of {pkg_name}: missing target '{target_rel}'"
+            )
             continue
         safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", tool)
         shim = bin_dir / safe_name
@@ -343,9 +353,12 @@ def _unregister_bins(project_root: Path, pkg_name: str) -> int:
     return removed
 
 
-def print_installed_capabilities(pkg_name: str, version: str,
-                                 module_dir: Path | None = None,
-                                 project_root: Path | None = None) -> None:
+def print_installed_capabilities(
+    pkg_name: str,
+    version: str,
+    module_dir: Path | None = None,
+    project_root: Path | None = None,
+) -> None:
     """Print the language surface a package adds when installed."""
     if module_dir is None:
         if project_root is None:
@@ -373,12 +386,18 @@ def _print_capability_block(pkg_name: str, version: str, shown) -> None:
         return
     lines = [f"{pkg_name}@{version} adds to the language:"]
     for label, items in shown:
-        lines.append(f"    {label + ':' :<14} {', '.join(items)}")
+        lines.append(f"    {label + ':':<14} {', '.join(items)}")
     style.print_info("\n".join(lines))
 
 
-def execute_get(inst: dict, project_root: Path, prebuilt: bool = False,
-                force: bool = False, no_cache: bool = False, sef: bool = False) -> None:
+def execute_get(
+    inst: dict,
+    project_root: Path,
+    prebuilt: bool = False,
+    force: bool = False,
+    no_cache: bool = False,
+    sef: bool = False,
+) -> None:
     """Execute a single GET instruction."""
     name = inst["GET"]
     url = inst.get("url")
@@ -398,11 +417,14 @@ def execute_get(inst: dict, project_root: Path, prebuilt: bool = False,
 
     # If no downloadable file, create a placeholder
     if no_download:
-        style.print_verbose(f"  {name}@{version} has no downloadable file (registry metadata only)")
+        style.print_verbose(
+            f"  {name}@{version} has no downloadable file (registry metadata only)"
+        )
         target.parent.mkdir(parents=True, exist_ok=True)
         target.mkdir(parents=True, exist_ok=True)
         (target / ".placeholder").write_text(
-            f"Package {name}@{version} - registry metadata only, no downloadable file")
+            f"Package {name}@{version} - registry metadata only, no downloadable file"
+        )
         style.print_installed(name, version, "placeholder")
         return
 
@@ -490,8 +512,14 @@ def execute(
 
         if "GET" in inst:
             style.print_step(i, total, f"GET {inst['GET']}")
-            execute_get(inst, project_root, prebuilt=prebuilt, force=force,
-                        no_cache=no_cache, sef=sef)
+            execute_get(
+                inst,
+                project_root,
+                prebuilt=prebuilt,
+                force=force,
+                no_cache=no_cache,
+                sef=sef,
+            )
         elif "REMOVE" in inst:
             style.print_step(i, total, f"REMOVE {inst['REMOVE']}")
             execute_remove(inst, project_root)
@@ -504,4 +532,5 @@ def execute(
     if bin_dir.is_dir() and any(bin_dir.iterdir()):
         style.print_info(
             f"CLI launchers in {bin_dir}\n"
-            '  Add to PATH: export PATH="$PATH:' + str(bin_dir) + '"')
+            '  Add to PATH: export PATH="$PATH:' + str(bin_dir) + '"'
+        )

@@ -73,8 +73,8 @@ from .sat import (
 )
 
 DEFAULT_REPO = "https://cypackage.5gnew.io.vn"
-DEVICE_POLL_INTERVAL = 3          # seconds between polls
-DEVICE_TIMEOUT = 15 * 60          # give up after 15 minutes
+DEVICE_POLL_INTERVAL = 3  # seconds between polls
+DEVICE_TIMEOUT = 15 * 60  # give up after 15 minutes
 
 
 def _is_local_path(spec: str) -> bool:
@@ -99,7 +99,7 @@ def _is_local_path(spec: str) -> bool:
 
 def _route_local_packages(packages: list[str]) -> tuple[list[str], list[str]]:
     """Split packages into registry packages and local paths.
-    
+
     Returns (registry_specs, local_paths).
     """
     registry = []
@@ -171,10 +171,14 @@ def _expand_groups(specs: list[PackageSpec], repos: list[str]) -> list[PackageSp
                         pkg_metadata = find_package_metadata(repos, pkg_name)
                         if pkg_metadata:
                             actual_version = pkg_metadata.get("version", "latest")
-                            expanded.append(PackageSpec(name=pkg_name, version=actual_version))
+                            expanded.append(
+                                PackageSpec(name=pkg_name, version=actual_version)
+                            )
                         else:
                             # Fallback to "latest" if we can't find the package
-                            expanded.append(PackageSpec(name=pkg_name, version="latest"))
+                            expanded.append(
+                                PackageSpec(name=pkg_name, version="latest")
+                            )
                     except Exception:
                         # Fallback to "latest" if we can't determine version
                         expanded.append(PackageSpec(name=pkg_name, version="latest"))
@@ -184,6 +188,19 @@ def _expand_groups(specs: list[PackageSpec], repos: list[str]) -> list[PackageSp
         else:
             expanded.append(spec)
     return expanded
+
+
+def _target_os(global_opt: GlobalOptions | None) -> str | None:
+    """OS part of the --target flag, or None when it is not set.
+
+    Used to resolve platform-scoped dependency tables ([cpm.dependencies.linux])
+    while reading the manifest, before _get_target can normalise the target.
+    """
+    if not global_opt or not global_opt.target:
+        return None
+    if global_opt.target in ("scorpion", "riscv32", "riscv32-unknown-elf"):
+        return "scorpion"
+    return global_opt.target.split("/")[0] or None
 
 
 def _get_target(manifest: Manifest, global_opt: GlobalOptions = None) -> Target:
@@ -238,6 +255,7 @@ def _compiler_pin(prebuilt: bool) -> str:
 # cpm sef
 # ---------------------------------------------------------------------------
 
+
 def sef_tool(global_opt: GlobalOptions, command: SefCommand):
     """Scorpion SEF binary tools (pack/dump/check/size).
 
@@ -261,6 +279,7 @@ def sef_tool(global_opt: GlobalOptions, command: SefCommand):
 # ---------------------------------------------------------------------------
 # cpm init
 # ---------------------------------------------------------------------------
+
 
 def init_project(global_opt: GlobalOptions, command: InitCommand):
     """Initialize a new CPM project.
@@ -318,6 +337,7 @@ def init_project(global_opt: GlobalOptions, command: InitCommand):
 # cpm add
 # ---------------------------------------------------------------------------
 
+
 def add_deps(global_opt: GlobalOptions, command: AddCommand):
     """Add packages to the project manifest and install them.
 
@@ -336,10 +356,12 @@ def add_deps(global_opt: GlobalOptions, command: AddCommand):
 
     # Route local paths
     registry_pkgs, local_paths = _route_local_packages(packages)
-    
+
     # Handle local packages first
     for path in local_paths:
-        install_local_deps(global_opt, LocalInstallCommand(path=path, force=command.force))
+        install_local_deps(
+            global_opt, LocalInstallCommand(path=path, force=command.force)
+        )
 
     # Handle registry packages
     if not registry_pkgs:
@@ -347,7 +369,7 @@ def add_deps(global_opt: GlobalOptions, command: AddCommand):
 
     specs = [PackageSpec.parse(p) for p in registry_pkgs]
     specs = _expand_groups(specs, repos)
-    manifest = read_manifest()
+    manifest = read_manifest(target_os=_target_os(global_opt))
 
     added = []
     skipped = []
@@ -377,15 +399,30 @@ def add_deps(global_opt: GlobalOptions, command: AddCommand):
         pkg_tuples = [(s.name, s.version) for s in to_install]
         target = _get_target(manifest)
         llvm_version = global_opt.llvm_version or manifest.llvm_version
-        tree = resolve_get(pkg_tuples, repos, target=target, prebuilt=manifest.prebuilt, llvm_version=llvm_version, cpyte_version=_compiler_pin(manifest.prebuilt), capabilities=cpyte_toolchain.toolchain_capabilities())
+        tree = resolve_get(
+            pkg_tuples,
+            repos,
+            target=target,
+            prebuilt=manifest.prebuilt,
+            llvm_version=llvm_version,
+            cpyte_version=_compiler_pin(manifest.prebuilt),
+            capabilities=cpyte_toolchain.toolchain_capabilities(),
+        )
         instructions = deduplicator(tree)
 
         if global_opt.verbose:
             style.print_verbose(f"Instruction stream: {instructions}")
 
         project_root = manifest.path.parent
-        execute(instructions, project_root, repos[0], prebuilt=manifest.prebuilt,
-                force=command.force, no_cache=global_opt.no_cache, sef=manifest.sef)
+        execute(
+            instructions,
+            project_root,
+            repos[0],
+            prebuilt=manifest.prebuilt,
+            force=command.force,
+            no_cache=global_opt.no_cache,
+            sef=manifest.sef,
+        )
 
         # Lock resolved versions
         lock = read_lockfile()
@@ -399,12 +436,13 @@ def add_deps(global_opt: GlobalOptions, command: AddCommand):
 # cpm remove
 # ---------------------------------------------------------------------------
 
+
 def remove_deps(global_opt: GlobalOptions, command: RemoveCommand):
     """Remove packages from manifest and filesystem."""
     repos = _get_repos(global_opt)
     packages = command.packages
 
-    manifest = read_manifest()
+    manifest = read_manifest(target_os=_target_os(global_opt))
     specs = [PackageSpec.parse(p) for p in packages]
     specs = _expand_groups(specs, repos)
     pkg_tuples = [(s.name, s.version) for s in specs]
@@ -412,7 +450,13 @@ def remove_deps(global_opt: GlobalOptions, command: RemoveCommand):
     style.print_header(f"Resolving {len(packages)} package(s) for removal")
     target = _get_target(manifest)
     llvm_version = global_opt.llvm_version or manifest.llvm_version
-    tree = resolve_remove(pkg_tuples, repos, target=target, prebuilt=manifest.prebuilt, llvm_version=llvm_version)
+    tree = resolve_remove(
+        pkg_tuples,
+        repos,
+        target=target,
+        prebuilt=manifest.prebuilt,
+        llvm_version=llvm_version,
+    )
     instructions = deduplicator(tree)
 
     if global_opt.verbose:
@@ -426,7 +470,9 @@ def remove_deps(global_opt: GlobalOptions, command: RemoveCommand):
 
     for spec in specs:
         if manifest.remove(spec.name):
-            style.print_info(f"  removed {spec.name} from {manifest.path.name if manifest.path else MANIFEST_NAME}")
+            style.print_info(
+                f"  removed {spec.name} from {manifest.path.name if manifest.path else MANIFEST_NAME}"
+            )
             changed = True
         if lock.remove(spec.name):
             style.print_info(f"  removed {spec.name} from cpm.lock")
@@ -441,6 +487,7 @@ def remove_deps(global_opt: GlobalOptions, command: RemoveCommand):
 # ---------------------------------------------------------------------------
 # cpm install
 # ---------------------------------------------------------------------------
+
 
 def install_deps(global_opt: GlobalOptions, command: InstallCommand):
     """Install dependencies.
@@ -457,7 +504,9 @@ def install_deps(global_opt: GlobalOptions, command: InstallCommand):
 
         # Handle local packages first
         for path in local_paths:
-            install_local_deps(global_opt, LocalInstallCommand(path=path, force=command.force))
+            install_local_deps(
+                global_opt, LocalInstallCommand(path=path, force=command.force)
+            )
 
         if not registry_pkgs:
             return
@@ -468,18 +517,33 @@ def install_deps(global_opt: GlobalOptions, command: InstallCommand):
         pkg_tuples = [(s.name, s.version) for s in specs]
 
         style.print_header(f"Resolving {len(packages)} package(s)")
-        manifest = read_manifest()
+        manifest = read_manifest(target_os=_target_os(global_opt))
         target = _get_target(manifest)
         llvm_version = global_opt.llvm_version or manifest.llvm_version
-        tree = resolve_get(pkg_tuples, repos, target=target, prebuilt=manifest.prebuilt, llvm_version=llvm_version, cpyte_version=_compiler_pin(manifest.prebuilt), capabilities=cpyte_toolchain.toolchain_capabilities())
+        tree = resolve_get(
+            pkg_tuples,
+            repos,
+            target=target,
+            prebuilt=manifest.prebuilt,
+            llvm_version=llvm_version,
+            cpyte_version=_compiler_pin(manifest.prebuilt),
+            capabilities=cpyte_toolchain.toolchain_capabilities(),
+        )
         instructions = deduplicator(tree)
 
         if global_opt.verbose:
             style.print_verbose(f"Instruction stream: {instructions}")
 
         project_root = manifest.path.parent
-        execute(instructions, project_root, repos[0], prebuilt=manifest.prebuilt,
-                force=command.force, no_cache=global_opt.no_cache, sef=manifest.sef)
+        execute(
+            instructions,
+            project_root,
+            repos[0],
+            prebuilt=manifest.prebuilt,
+            force=command.force,
+            no_cache=global_opt.no_cache,
+            sef=manifest.sef,
+        )
 
         lock = read_lockfile()
         for inst in instructions:
@@ -488,7 +552,7 @@ def install_deps(global_opt: GlobalOptions, command: InstallCommand):
         write_lockfile(lock)
     else:
         # Install from manifest
-        manifest = read_manifest()
+        manifest = read_manifest(target_os=_target_os(global_opt))
         if not manifest.path:
             style.print_error("No cpy.toml found. Run 'cpm init' first.")
             return
@@ -511,15 +575,30 @@ def install_deps(global_opt: GlobalOptions, command: InstallCommand):
         style.print_header(f"Installing {len(to_install)} package(s) from manifest")
         target = _get_target(manifest)
         llvm_version = global_opt.llvm_version or manifest.llvm_version
-        tree = resolve_get(to_install, repos, target=target, prebuilt=manifest.prebuilt, llvm_version=llvm_version, cpyte_version=_compiler_pin(manifest.prebuilt), capabilities=cpyte_toolchain.toolchain_capabilities())
+        tree = resolve_get(
+            to_install,
+            repos,
+            target=target,
+            prebuilt=manifest.prebuilt,
+            llvm_version=llvm_version,
+            cpyte_version=_compiler_pin(manifest.prebuilt),
+            capabilities=cpyte_toolchain.toolchain_capabilities(),
+        )
         instructions = deduplicator(tree)
 
         if global_opt.verbose:
             style.print_verbose(f"Instruction stream: {instructions}")
 
         project_root = manifest.path.parent
-        execute(instructions, project_root, repos[0], prebuilt=manifest.prebuilt,
-                force=command.force, no_cache=global_opt.no_cache, sef=manifest.sef)
+        execute(
+            instructions,
+            project_root,
+            repos[0],
+            prebuilt=manifest.prebuilt,
+            force=command.force,
+            no_cache=global_opt.no_cache,
+            sef=manifest.sef,
+        )
 
         for inst in instructions:
             if "GET" in inst:
@@ -530,6 +609,7 @@ def install_deps(global_opt: GlobalOptions, command: InstallCommand):
 # ---------------------------------------------------------------------------
 # cpm install-local
 # ---------------------------------------------------------------------------
+
 
 def install_local_deps(global_opt: GlobalOptions, command: LocalInstallCommand):
     """Install a package from a local directory.
@@ -558,6 +638,7 @@ def install_local_deps(global_opt: GlobalOptions, command: LocalInstallCommand):
 
     try:
         import json
+
         with open(package_json_path, "r") as f:
             pkg_data = json.load(f)
     except Exception as e:
@@ -578,12 +659,14 @@ def install_local_deps(global_opt: GlobalOptions, command: LocalInstallCommand):
     # Find or create manifest
     manifest_path = find_manifest()
     if manifest_path:
-        manifest = read_manifest(manifest_path)
+        manifest = read_manifest(manifest_path, target_os=_target_os(global_opt))
         project_root = manifest_path.parent
     else:
         # Create a minimal manifest
         project_root = Path.cwd()
-        manifest = Manifest(name=project_root.name, version="0.1.0", path=project_root / MANIFEST_NAME)
+        manifest = Manifest(
+            name=project_root.name, version="0.1.0", path=project_root / MANIFEST_NAME
+        )
 
     # Target directory
     target = _module_path(project_root, name, version)
@@ -593,7 +676,9 @@ def install_local_deps(global_opt: GlobalOptions, command: LocalInstallCommand):
         return
 
     # Copy the local directory
-    style.print_header(f"Installing {style.print_package(name, version)} from local directory")
+    style.print_header(
+        f"Installing {style.print_package(name, version)} from local directory"
+    )
 
     if target.exists():
         shutil.rmtree(target)
@@ -611,7 +696,8 @@ def install_local_deps(global_opt: GlobalOptions, command: LocalInstallCommand):
         bin_dir = _bin_dir(project_root)
         style.print_info(
             f"Registered CLI tools: {', '.join(registered)}\n"
-            f'  Add to PATH: export PATH="$PATH:{bin_dir}"')
+            f'  Add to PATH: export PATH="$PATH:{bin_dir}"'
+        )
 
     # Update lockfile
     lock = read_lockfile()
@@ -636,6 +722,7 @@ def install_local_deps(global_opt: GlobalOptions, command: LocalInstallCommand):
 # cpm update
 # ---------------------------------------------------------------------------
 
+
 def update_deps(global_opt: GlobalOptions, command: UpdateCommand):
     """Update packages to their latest resolved versions.
 
@@ -648,7 +735,7 @@ def update_deps(global_opt: GlobalOptions, command: UpdateCommand):
     repos = _get_repos(global_opt)
     packages = command.packages
 
-    manifest = read_manifest()
+    manifest = read_manifest(target_os=_target_os(global_opt))
     if not manifest.path:
         style.print_error("No cpy.toml found. Run 'cpm init' first.")
         return
@@ -685,13 +772,15 @@ def update_deps(global_opt: GlobalOptions, command: UpdateCommand):
                 continue
 
             manifest.add(PackageSpec(name=name, version=latest_version))
-            updated.append({
-                "name": name,
-                "old": current_ver,
-                "new": latest_version,
-                "url": latest_url,
-                "checksum": metadata.get("checksum", ""),
-            })
+            updated.append(
+                {
+                    "name": name,
+                    "old": current_ver,
+                    "new": latest_version,
+                    "url": latest_url,
+                    "checksum": metadata.get("checksum", ""),
+                }
+            )
 
         except Exception as e:
             failed.append({"name": name, "error": str(e)})
@@ -699,7 +788,9 @@ def update_deps(global_opt: GlobalOptions, command: UpdateCommand):
     if updated:
         style.print_header("Updates available")
         for u in updated:
-            style.print_info(f"  {style.print_package(u['name'])}: {u['old']} -> {style.print_package(u['name'], u['new'])}")
+            style.print_info(
+                f"  {style.print_package(u['name'])}: {u['old']} -> {style.print_package(u['name'], u['new'])}"
+            )
 
     if up_to_date:
         style.print_info(f"\nUp to date: {', '.join(up_to_date)}")
@@ -718,19 +809,28 @@ def update_deps(global_opt: GlobalOptions, command: UpdateCommand):
             all_instructions = []
             for u in updated:
                 if u["url"]:
-                    instructions = [{
-                        "GET": u["name"],
-                        "url": u["url"],
-                        "checksum": u["checksum"],
-                        "version": u["new"],
-                        "sef": True if manifest.sef else False,
-                    }]
+                    instructions = [
+                        {
+                            "GET": u["name"],
+                            "url": u["url"],
+                            "checksum": u["checksum"],
+                            "version": u["new"],
+                            "sef": True if manifest.sef else False,
+                        }
+                    ]
                     all_instructions.extend(instructions)
                     lock.add(_lock_from_instruction(instructions[0]))
             if all_instructions:
                 project_root = manifest.path.parent
-                execute(all_instructions, project_root, repos[0], prebuilt=manifest.prebuilt,
-                        force=False, no_cache=global_opt.no_cache, sef=manifest.sef)
+                execute(
+                    all_instructions,
+                    project_root,
+                    repos[0],
+                    prebuilt=manifest.prebuilt,
+                    force=False,
+                    no_cache=global_opt.no_cache,
+                    sef=manifest.sef,
+                )
             write_lockfile(lock)
 
 
@@ -738,12 +838,13 @@ def update_deps(global_opt: GlobalOptions, command: UpdateCommand):
 # cpm build
 # ---------------------------------------------------------------------------
 
+
 def build_project(global_opt: GlobalOptions, command: BuildCommand):
     """Build the project.
 
     Prefers the Cpyte compiler. Falls back to build.py for custom builds.
     """
-    manifest = read_manifest()
+    manifest = read_manifest(target_os=_target_os(global_opt))
     if not manifest.path:
         style.print_error("No cpy.toml found. Run 'cpm init' first.")
         return
@@ -756,7 +857,9 @@ def build_project(global_opt: GlobalOptions, command: BuildCommand):
         style.print_error("Cpyte compiler not detected.")
         if toolchain.binary_error:
             style.print_warning(f"  {toolchain.binary_error}")
-        style.print_info("  Install the compiler: pip install cpyte  (or run 'cpm doctor')")
+        style.print_info(
+            "  Install the compiler: pip install cpyte  (or run 'cpm doctor')"
+        )
         return
 
     style.print_info(
@@ -783,8 +886,12 @@ def build_project(global_opt: GlobalOptions, command: BuildCommand):
     if manifest.build.main:
         entry = project_dir / manifest.build.main
     if entry is None:
-        style.print_warning("No entry point found (looked for main.cpy, <project>.cpy, src/main.cpy).")
-        style.print_info("Add a [cpm.build] section to cpy.toml or create a build.py script.")
+        style.print_warning(
+            "No entry point found (looked for main.cpy, <project>.cpy, src/main.cpy)."
+        )
+        style.print_info(
+            "Add a [cpm.build] section to cpy.toml or create a build.py script."
+        )
         _register_project_bins(project_dir, manifest)
         return
 
@@ -816,7 +923,9 @@ def build_project(global_opt: GlobalOptions, command: BuildCommand):
             )
         if sef_rc != 0:
             style.print_error(f"Scorpion build failed with exit code {sef_rc}")
-            style.print_warning("Install the RISC-V toolchain (riscv*-elf-gcc) to cross-compile.")
+            style.print_warning(
+                "Install the RISC-V toolchain (riscv*-elf-gcc) to cross-compile."
+            )
             sys.exit(sef_rc)
         if sef_path.exists():
             style.print_success(f"Wrote {sef_path.name}")
@@ -848,7 +957,8 @@ def _register_project_bins(project_dir: Path, manifest) -> None:
     if registered:
         style.print_info(
             f"Registered CLI tools: {', '.join(registered)}\n"
-            f'  Add to PATH: export PATH="$PATH:{_bin_dir(project_dir)}"')
+            f'  Add to PATH: export PATH="$PATH:{_bin_dir(project_dir)}"'
+        )
 
 
 def _find_project_entry(project_dir: Path, project_name: str) -> Path | None:
@@ -869,6 +979,7 @@ def _find_project_entry(project_dir: Path, project_name: str) -> Path | None:
 # cpm run
 # ---------------------------------------------------------------------------
 
+
 def run_script(global_opt: GlobalOptions, command: RunCommand):
     """Run a script defined in the project.
 
@@ -880,7 +991,7 @@ def run_script(global_opt: GlobalOptions, command: RunCommand):
     script_name = command.script
     args = command.args
 
-    manifest = read_manifest()
+    manifest = read_manifest(target_os=_target_os(global_opt))
     if not manifest.path:
         style.print_error("No cpy.toml found. Run 'cpm init' first.")
         return
@@ -935,6 +1046,7 @@ def run_script(global_opt: GlobalOptions, command: RunCommand):
 # cpm exec
 # ---------------------------------------------------------------------------
 
+
 def exec_cpy(global_opt: GlobalOptions, command: ExecCommand):
     """Execute a .cpy file with the Cpyte compiler."""
     source = Path(command.file).resolve()
@@ -968,6 +1080,7 @@ def _run_cpy_file(source: Path, args: list[str]) -> None:
 # cpm doctor
 # ---------------------------------------------------------------------------
 
+
 def doctor_project(global_opt: GlobalOptions, command: DoctorCommand):
     """Diagnose the Cpyte toolchain and the current project."""
     style.banner(title="Toolchain Diagnostics")
@@ -975,20 +1088,28 @@ def doctor_project(global_opt: GlobalOptions, command: DoctorCommand):
     report = cpyte_toolchain.diagnose()
     compiler = report["compiler"]
 
-    style.box("Cpyte Compiler", [
-        f"  detected   : {style.Color.GREEN}yes{style.Color.RESET}" if compiler["detected"]
-        else f"  detected   : {style.Color.RED}no{style.Color.RESET}",
-        f"  version    : {style.Color.BOLD}{compiler['version'] or '-'}{style.Color.RESET}",
-        f"  binary     : {compiler['binary'] or '-'}",
-        f"  module     : {compiler['module_path'] or '-'}",
-        f"  llvm       : {report['llvm_version'] or '-'}",
-    ])
+    style.box(
+        "Cpyte Compiler",
+        [
+            f"  detected   : {style.Color.GREEN}yes{style.Color.RESET}"
+            if compiler["detected"]
+            else f"  detected   : {style.Color.RED}no{style.Color.RESET}",
+            f"  version    : {style.Color.BOLD}{compiler['version'] or '-'}{style.Color.RESET}",
+            f"  binary     : {compiler['binary'] or '-'}",
+            f"  module     : {compiler['module_path'] or '-'}",
+            f"  llvm       : {report['llvm_version'] or '-'}",
+        ],
+    )
 
     codegen = report.get("codegen")
     if codegen:
         lines = []
         for feature, ok in codegen.items():
-            mark = f"{style.Color.GREEN}ok{style.Color.RESET}" if ok else f"{style.Color.RED}missing{style.Color.RESET}"
+            mark = (
+                f"{style.Color.GREEN}ok{style.Color.RESET}"
+                if ok
+                else f"{style.Color.RED}missing{style.Color.RESET}"
+            )
             lines.append(f"  {feature:14} {mark}")
         style.box("Codegen Features", lines)
 
@@ -1000,12 +1121,16 @@ def doctor_project(global_opt: GlobalOptions, command: DoctorCommand):
         style.print_info("  Install: pip install cpyte")
 
     ws = report["workspace"]
-    style.box("Project", [
-        f"  name       : {ws['project'] or '-'}",
-        f"  manifest   : {ws['manifest'] or '-'}",
-        f"  .cpm dir   : {style.Color.GREEN}present{style.Color.RESET}" if ws["cpm_dir"]
-        else f"  .cpm dir   : {style.Color.DIM}absent (run 'cpm install'){style.Color.RESET}",
-    ])
+    style.box(
+        "Project",
+        [
+            f"  name       : {ws['project'] or '-'}",
+            f"  manifest   : {ws['manifest'] or '-'}",
+            f"  .cpm dir   : {style.Color.GREEN}present{style.Color.RESET}"
+            if ws["cpm_dir"]
+            else f"  .cpm dir   : {style.Color.DIM}absent (run 'cpm install'){style.Color.RESET}",
+        ],
+    )
 
     if compiler["detected"]:
         style.print_success("Toolchain looks good")
@@ -1016,6 +1141,7 @@ def doctor_project(global_opt: GlobalOptions, command: DoctorCommand):
 # ---------------------------------------------------------------------------
 # cpm login / logout (device code flow)
 # ---------------------------------------------------------------------------
+
 
 def _resolve_server(global_opt: GlobalOptions, explicit: str = "") -> str:
     """Pick the registry server: CLI flag > stored default > DEFAULT_REPO."""
@@ -1043,8 +1169,12 @@ def login_device(global_opt: GlobalOptions, command: LoginCommand):
     import requests as rq
 
     # NOTE: --server is a global option, so it lands in global_opt.server
-    server = command.server or (global_opt.server[0] if global_opt.server else "") \
-        or global_opt.config or ""
+    server = (
+        command.server
+        or (global_opt.server[0] if global_opt.server else "")
+        or global_opt.config
+        or ""
+    )
     if not server:
         creds = auth_store.load_credentials()
         server = creds.server if creds else DEFAULT_REPO
@@ -1058,7 +1188,9 @@ def login_device(global_opt: GlobalOptions, command: LoginCommand):
         style.print_error(f"Cannot reach {server}: {exc}")
         sys.exit(1)
     if resp.status_code != 200:
-        style.print_error(f"Registry does not support device login ({resp.status_code})")
+        style.print_error(
+            f"Registry does not support device login ({resp.status_code})"
+        )
         style.print_info("Update the registry server to the latest version.")
         sys.exit(1)
 
@@ -1110,28 +1242,36 @@ def login_device(global_opt: GlobalOptions, command: LoginCommand):
             # unexpected response shape — back off and retry
             time.sleep(interval)
 
-    style.print_error("Login was not approved in time" if status != "denied" else "Login denied")
+    style.print_error(
+        "Login was not approved in time" if status != "denied" else "Login denied"
+    )
     sys.exit(1)
 
 
 def logout_device(global_opt: GlobalOptions, command: LogoutCommand):
     """Remove stored registry credentials."""
-    server = command.server or (global_opt.server[0] if global_opt.server else "") \
-        or global_opt.config or ""
+    server = (
+        command.server
+        or (global_opt.server[0] if global_opt.server else "")
+        or global_opt.config
+        or ""
+    )
     removed = auth_store.clear_credentials(server)
     creds = auth_store.list_servers()
     if not removed:
-        style.print_warning("No stored credentials found" + (f" for {server}" if server else ""))
+        style.print_warning(
+            "No stored credentials found" + (f" for {server}" if server else "")
+        )
         return
     style.print_success(
-        f"Logged out of {server.rstrip('/')}"
-        if server else "Logged out (all servers)"
+        f"Logged out of {server.rstrip('/')}" if server else "Logged out (all servers)"
     )
 
 
 # ---------------------------------------------------------------------------
 # cpm report
 # ---------------------------------------------------------------------------
+
 
 def _json_or_error(resp):
     """Best-effort JSON decode of an HTTP response."""
@@ -1145,8 +1285,12 @@ def report_package(global_opt: GlobalOptions, command: ReportCommand):
     """Report a package for malware or abuse."""
     import requests as rq
 
-    server = command.server or (global_opt.server[0] if global_opt.server else "") \
-        or global_opt.config or DEFAULT_REPO
+    server = (
+        command.server
+        or (global_opt.server[0] if global_opt.server else "")
+        or global_opt.config
+        or DEFAULT_REPO
+    )
     server = server.rstrip("/")
 
     token = command.token
@@ -1157,9 +1301,7 @@ def report_package(global_opt: GlobalOptions, command: ReportCommand):
             if global_opt.verbose:
                 style.print_verbose(f"Using stored credentials for {server}")
     if not token:
-        raise CLIError(
-            "no auth token — run 'cpm login' first or pass --token"
-        )
+        raise CLIError("no auth token — run 'cpm login' first or pass --token")
 
     payload = {
         "package": command.package,
@@ -1220,7 +1362,11 @@ def publish_package(global_opt: GlobalOptions, command: PublishCommand):
         creds = auth_store.load_credentials(server)
         if creds and creds.token:
             token = creds.token
-            style.print_info(f"Using stored credentials for {server} ({creds.email})" if creds.email else f"Using stored credentials for {server}")
+            style.print_info(
+                f"Using stored credentials for {server} ({creds.email})"
+                if creds.email
+                else f"Using stored credentials for {server}"
+            )
     package_dir = Path(command.directory).resolve()
 
     if not package_dir.exists():
@@ -1247,7 +1393,9 @@ def publish_package(global_opt: GlobalOptions, command: PublishCommand):
         style.print_success("package.json declares scorpion = true")
         sef_files = list(package_dir.glob("*.sef"))
         if not sef_files:
-            style.print_warning("No .sef artifact found — run 'cpm build' with scorpion enabled first.")
+            style.print_warning(
+                "No .sef artifact found — run 'cpm build' with scorpion enabled first."
+            )
 
     # Toolchain requirements: recorded for capability-aware resolution
     toolchain_required = pkg_json.metadata.get("toolchain") if pkg_json else None
@@ -1362,6 +1510,7 @@ def search_packages(global_opt: GlobalOptions, command: SearchCommand):
         for pkg_dir in modules_dir.rglob("package.toml"):
             try:
                 import tomllib
+
                 with open(pkg_dir, "rb") as f:
                     data = tomllib.load(f)
                 pkg_name = data.get("package", {}).get("name", "")
@@ -1375,7 +1524,11 @@ def search_packages(global_opt: GlobalOptions, command: SearchCommand):
     remote_results = []
     for repo_url in repos:
         try:
-            resp = rq.get(f"{repo_url.rstrip('/')}/search", params={"q": command.query}, timeout=10)
+            resp = rq.get(
+                f"{repo_url.rstrip('/')}/search",
+                params={"q": command.query},
+                timeout=10,
+            )
             if resp.status_code == 200:
                 remote_results = resp.json()
                 break
@@ -1392,12 +1545,18 @@ def search_packages(global_opt: GlobalOptions, command: SearchCommand):
     if remote_results:
         style.print_header("Community")
         for r in remote_results:
-            marker = " (installed)" if any(l["name"] == r["name"] for l in local_results) else ""
-            style.print_info(f"  {style.print_package(r['name'], r['latest'])} by {r['owner']}{marker}")
-            caps = r.get('capabilities') or {}
+            marker = (
+                " (installed)"
+                if any(l["name"] == r["name"] for l in local_results)
+                else ""
+            )
+            style.print_info(
+                f"  {style.print_package(r['name'], r['latest'])} by {r['owner']}{marker}"
+            )
+            caps = r.get("capabilities") or {}
             if caps and any(caps.values()):
-                kw = caps.get('keywords') or []
-                ops = caps.get('operators') or []
+                kw = caps.get("keywords") or []
+                ops = caps.get("operators") or []
                 style.print_verbose(
                     f"      keywords: {', '.join(kw)}" if kw else "",
                     f"      operators: {', '.join(ops)}" if ops else "",
@@ -1411,6 +1570,7 @@ def search_packages(global_opt: GlobalOptions, command: SearchCommand):
 # cpm info
 # ---------------------------------------------------------------------------
 
+
 def show_package_info(global_opt: GlobalOptions, command: InfoCommand):
     """Show detailed information about a package."""
     if not command.package:
@@ -1420,48 +1580,54 @@ def show_package_info(global_opt: GlobalOptions, command: InfoCommand):
 
     repos = _get_repos(global_opt)
     spec = PackageSpec.parse(command.package)
-    
+
     style.print_header(f"Package: {style.print_package(spec.name)}")
     style.print_info(f"Version: {spec.version}")
-    
+
     try:
         metadata = find_package_metadata(repos, spec.name)
         if metadata:
             style.print_header("Registry Metadata")
             style.print_info(f"  Latest version: {metadata.get('version', 'unknown')}")
             style.print_info(f"  URL: {metadata.get('url', 'unknown')}")
-            
-            claims = metadata.get('claims', {})
+
+            claims = metadata.get("claims", {})
             if claims:
                 style.print_info("  Platform claims:")
-                if 'os' in claims:
+                if "os" in claims:
                     style.print_info(f"    OS: {claims['os']}")
-                if 'arch' in claims:
+                if "arch" in claims:
                     style.print_info(f"    Arch: {claims['arch']}")
-                if 'features' in claims:
+                if "features" in claims:
                     style.print_info(f"    Features: {claims['features']}")
-            
-            requires = metadata.get('requires', [])
+
+            requires = metadata.get("requires", [])
             if requires:
                 style.print_info("  Dependencies:")
                 for dep in requires:
                     style.print_info(f"    - {dep}")
 
-            toolchain = metadata.get('toolchain', {})
+            toolchain = metadata.get("toolchain", {})
             if toolchain:
                 style.print_info("  Toolchain requirements:")
                 for key, value in toolchain.items():
                     style.print_info(f"    {key}: {value}")
-            
-            if metadata.get('no_download'):
-                style.print_info("  Note: Metadata-only package (no downloadable content)")
 
-            caps = metadata.get('capabilities') or {}
+            if metadata.get("no_download"):
+                style.print_info(
+                    "  Note: Metadata-only package (no downloadable content)"
+                )
+
+            caps = metadata.get("capabilities") or {}
             if caps and any(caps.values()):
                 style.print_header("Language capabilities")
-                for label, key in (("Keywords", "keywords"), ("Operators", "operators"),
-                                   ("Tags", "tags"), ("Macros", "macros"),
-                                   ("Custom types", "custom_types")):
+                for label, key in (
+                    ("Keywords", "keywords"),
+                    ("Operators", "operators"),
+                    ("Tags", "tags"),
+                    ("Macros", "macros"),
+                    ("Custom types", "custom_types"),
+                ):
                     items = caps.get(key) or []
                     if items:
                         style.print_info(f"  {label}: {', '.join(items)}")
@@ -1471,14 +1637,15 @@ def show_package_info(global_opt: GlobalOptions, command: InfoCommand):
         style.print_error(f"fetching package info: {e}")
         if global_opt.verbose:
             import traceback
+
             traceback.print_exc()
-    
+
     # Check for package.json in installed packages
     manifest_path = find_manifest()
     if manifest_path:
         project_root = manifest_path.parent
         modules_dir = project_root / ".cpm" / "modules"
-        
+
         # Try to find the package in installed modules
         package_dir = modules_dir / spec.name
         if package_dir.exists():
@@ -1487,32 +1654,54 @@ def show_package_info(global_opt: GlobalOptions, command: InfoCommand):
             if versions:
                 latest_version_dir = sorted(versions, reverse=True)[0]
                 package_json = read_package_json(latest_version_dir)
-                
+
                 if package_json:
                     style.print_header("Extension Capabilities")
                     if package_json.capabilities.keywords:
-                        style.print_info(f"  Keywords: {', '.join(sorted(package_json.capabilities.keywords))}")
+                        style.print_info(
+                            f"  Keywords: {', '.join(sorted(package_json.capabilities.keywords))}"
+                        )
                     if package_json.capabilities.operators:
-                        style.print_info(f"  Operators: {', '.join(sorted(package_json.capabilities.operators))}")
+                        style.print_info(
+                            f"  Operators: {', '.join(sorted(package_json.capabilities.operators))}"
+                        )
                     if package_json.capabilities.tags:
-                        style.print_info(f"  Tags: {', '.join(sorted(package_json.capabilities.tags))}")
+                        style.print_info(
+                            f"  Tags: {', '.join(sorted(package_json.capabilities.tags))}"
+                        )
                     if package_json.capabilities.macros:
-                        style.print_info(f"  Macros: {', '.join(sorted(package_json.capabilities.macros))}")
+                        style.print_info(
+                            f"  Macros: {', '.join(sorted(package_json.capabilities.macros))}"
+                        )
                     if package_json.capabilities.custom_types:
-                        style.print_info(f"  Custom Types: {', '.join(sorted(package_json.capabilities.custom_types))}")
-                    
-                    if package_json.extensions.parser_hooks or package_json.extensions.semantic_hooks or \
-                       package_json.extensions.codegen_hooks or package_json.extensions.runtime_hooks:
+                        style.print_info(
+                            f"  Custom Types: {', '.join(sorted(package_json.capabilities.custom_types))}"
+                        )
+
+                    if (
+                        package_json.extensions.parser_hooks
+                        or package_json.extensions.semantic_hooks
+                        or package_json.extensions.codegen_hooks
+                        or package_json.extensions.runtime_hooks
+                    ):
                         style.print_info("  Extension Hooks:")
                         if package_json.extensions.parser_hooks:
-                            style.print_info(f"    Parser: {', '.join(package_json.extensions.parser_hooks)}")
+                            style.print_info(
+                                f"    Parser: {', '.join(package_json.extensions.parser_hooks)}"
+                            )
                         if package_json.extensions.semantic_hooks:
-                            style.print_info(f"    Semantic: {', '.join(package_json.extensions.semantic_hooks)}")
+                            style.print_info(
+                                f"    Semantic: {', '.join(package_json.extensions.semantic_hooks)}"
+                            )
                         if package_json.extensions.codegen_hooks:
-                            style.print_info(f"    Codegen: {', '.join(package_json.extensions.codegen_hooks)}")
+                            style.print_info(
+                                f"    Codegen: {', '.join(package_json.extensions.codegen_hooks)}"
+                            )
                         if package_json.extensions.runtime_hooks:
-                            style.print_info(f"    Runtime: {', '.join(package_json.extensions.runtime_hooks)}")
-                    
+                            style.print_info(
+                                f"    Runtime: {', '.join(package_json.extensions.runtime_hooks)}"
+                            )
+
                     if package_json.metadata:
                         style.print_info("  Metadata:")
                         for key, value in package_json.metadata.items():
@@ -1523,23 +1712,30 @@ def show_package_info(global_opt: GlobalOptions, command: InfoCommand):
 # cpm list
 # ---------------------------------------------------------------------------
 
+
 def list_installed_packages(global_opt: GlobalOptions, command: ListCommand):
     """List all installed packages in the current project."""
     manifest_path = find_manifest()
     if not manifest_path:
         style.print_error("No cpy.toml found. Are you in a CPM project?")
         return
-    
+
     project_root = manifest_path.parent
     modules_dir = project_root / ".cpm" / "modules"
-    
+
     lock = read_lockfile()
     if lock and lock.entries:
         style.print_header("Installed packages (from lockfile)")
         for entry in lock.entries:
             installed_path = modules_dir / entry.name / entry.version
-            status = f"{style.Color.GREEN}ok{style.Color.RESET}" if installed_path.exists() else f"{style.Color.RED}missing{style.Color.RESET}"
-            style.print_info(f"  [{status}] {style.print_package(entry.name, entry.version)}")
+            status = (
+                f"{style.Color.GREEN}ok{style.Color.RESET}"
+                if installed_path.exists()
+                else f"{style.Color.RED}missing{style.Color.RESET}"
+            )
+            style.print_info(
+                f"  [{status}] {style.print_package(entry.name, entry.version)}"
+            )
             if entry.dependencies:
                 for dep in entry.dependencies:
                     style.print_info(f"      - {dep}")
@@ -1551,7 +1747,9 @@ def list_installed_packages(global_opt: GlobalOptions, command: ListCommand):
                 if pkg_dir.is_dir():
                     for version_dir in sorted(pkg_dir.iterdir()):
                         if version_dir.is_dir():
-                            style.print_info(f"  {style.print_package(pkg_dir.name, version_dir.name)}")
+                            style.print_info(
+                                f"  {style.print_package(pkg_dir.name, version_dir.name)}"
+                            )
         else:
             style.print_info("No packages installed")
 
@@ -1583,10 +1781,14 @@ def _constraint_satisfied(constraint: str, version: str) -> bool:
     except InvalidVersion:
         return False
 
-    if constraint.startswith(("==", "!=", "<=", ">=", "<", ">", "~=")) \
-            or "," in constraint or "||" in constraint:
+    if (
+        constraint.startswith(("==", "!=", "<=", ">=", "<", ">", "~="))
+        or "," in constraint
+        or "||" in constraint
+    ):
         try:
             from packaging.specifiers import SpecifierSet
+
             return version in SpecifierSet(constraint)
         except Exception:
             return False
@@ -1609,8 +1811,11 @@ def _constraint_satisfied(constraint: str, version: str) -> bool:
         return actual < Version(f"0.0.{pa + 1}")
     if op in ("~", "~="):
         # ~1.2.3 := >=1.2.3 <1.3.0
-        return (actual.major, actual.minor, actual.micro) >= (maj, mi, pa) \
-            and actual < Version(f"{maj}.{mi + 1}.0")
+        return (actual.major, actual.minor, actual.micro) >= (
+            maj,
+            mi,
+            pa,
+        ) and actual < Version(f"{maj}.{mi + 1}.0")
 
     # Bare version: major-version compatibility (CPM prebuilt contract).
     return actual.major == maj
@@ -1630,6 +1835,7 @@ class _Issue:
 
 def _check_manifest_fields(manifest, root, fixable, issues):
     if not manifest.name:
+
         def _fix_name():
             derived = re.sub(r"[^a-z0-9._-]", "-", root.name.lower()).strip("-")
             if not derived:
@@ -1639,36 +1845,46 @@ def _check_manifest_fields(manifest, root, fixable, issues):
             manifest.name = derived
             write_manifest(manifest)
 
-        issues.append(_Issue(
-            "error", "[cpm] name is missing",
-            hint="required for publishing",
-            fix=_fix_name if fixable else None,
-        ))
+        issues.append(
+            _Issue(
+                "error",
+                "[cpm] name is missing",
+                hint="required for publishing",
+                fix=_fix_name if fixable else None,
+            )
+        )
     elif len(manifest.name) > 214 or not _NAME_RE.match(manifest.name):
-        issues.append(_Issue(
-            "error",
-            f"[cpm] invalid project name: {manifest.name!r}",
-            hint="letters/digits/._- only, must start with a letter",
-        ))
+        issues.append(
+            _Issue(
+                "error",
+                f"[cpm] invalid project name: {manifest.name!r}",
+                hint="letters/digits/._- only, must start with a letter",
+            )
+        )
 
     if not manifest.version or not _VERSION_RE.match(manifest.version):
+
         def _fix_version():
             manifest.version = "0.1.0"
             write_manifest(manifest)
 
-        issues.append(_Issue(
-            "error",
-            "[cpm] version is missing" if not manifest.version
-            else f"[cpm] invalid version: {manifest.version!r} (want X.Y[.Z])",
-            hint="e.g. 0.1.0",
-            fix=_fix_version if fixable else None,
-        ))
+        issues.append(
+            _Issue(
+                "error",
+                "[cpm] version is missing"
+                if not manifest.version
+                else f"[cpm] invalid version: {manifest.version!r} (want X.Y[.Z])",
+                hint="e.g. 0.1.0",
+                fix=_fix_version if fixable else None,
+            )
+        )
 
     for label, value, known in (
         ("os", manifest.target.os, _KNOWN_OS),
         ("arch", manifest.target.arch, _KNOWN_ARCH),
     ):
         if value and value not in known:
+
             def _make_fix(lbl=label):
                 def _fix_target():
                     if lbl == "os":
@@ -1676,53 +1892,66 @@ def _check_manifest_fields(manifest, root, fixable, issues):
                     else:
                         manifest.target.arch = None
                     write_manifest(manifest)
+
                 return _fix_target
 
-            issues.append(_Issue(
-                "error",
-                f"[cpm.target] unknown {label}: {value!r}",
-                hint=f"known values: {', '.join(sorted(known))}",
-                fix=_make_fix() if fixable else None,
-            ))
+            issues.append(
+                _Issue(
+                    "error",
+                    f"[cpm.target] unknown {label}: {value!r}",
+                    hint=f"known values: {', '.join(sorted(known))}",
+                    fix=_make_fix() if fixable else None,
+                )
+            )
 
     if manifest.build.main and not (root / manifest.build.main).exists():
-        issues.append(_Issue(
-            "error",
-            f"[cpm.build] main entry not found: {manifest.build.main}",
-            hint="fix the path or create the file",
-        ))
+        issues.append(
+            _Issue(
+                "error",
+                f"[cpm.build] main entry not found: {manifest.build.main}",
+                hint="fix the path or create the file",
+            )
+        )
     for sym in manifest.build.exports:
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", sym):
             issues.append(_Issue("warn", f"[cpm.build] invalid export symbol: {sym!r}"))
 
     for tool, rel in manifest.bin.items():
         if not tool or not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", tool):
-            issues.append(_Issue(
-                "error",
-                f"[cpm.bin] invalid tool name: {tool!r}",
-                hint="letters/digits/._- only",
-            ))
+            issues.append(
+                _Issue(
+                    "error",
+                    f"[cpm.bin] invalid tool name: {tool!r}",
+                    hint="letters/digits/._- only",
+                )
+            )
         if not rel:
             issues.append(_Issue("error", f"[cpm.bin] '{tool}' has empty target path"))
         elif Path(rel).is_absolute():
-            issues.append(_Issue(
-                "error",
-                f"[cpm.bin] '{tool}' target must be a project-relative path, got {rel!r}",
-            ))
+            issues.append(
+                _Issue(
+                    "error",
+                    f"[cpm.bin] '{tool}' target must be a project-relative path, got {rel!r}",
+                )
+            )
         elif not (root / rel).exists():
-            issues.append(_Issue(
-                "error",
-                f"[cpm.bin] '{tool}' target not found: {rel}",
-                hint=".cpy targets run via JIT; native binaries are executed directly",
-            ))
+            issues.append(
+                _Issue(
+                    "error",
+                    f"[cpm.bin] '{tool}' target not found: {rel}",
+                    hint=".cpy targets run via JIT; native binaries are executed directly",
+                )
+            )
 
     for repo in manifest.repos:
         if not repo.startswith("https://"):
-            issues.append(_Issue(
-                "error",
-                f"insecure repo URL: {repo}",
-                hint="non-HTTPS registries can serve tampered packages",
-            ))
+            issues.append(
+                _Issue(
+                    "error",
+                    f"insecure repo URL: {repo}",
+                    hint="non-HTTPS registries can serve tampered packages",
+                )
+            )
 
 
 def _check_dependencies(manifest, modules_dir, issues):
@@ -1735,31 +1964,42 @@ def _check_dependencies(manifest, modules_dir, issues):
     for pkg in manifest.packages:
         constraint = pkg.version.strip()
         if constraint == "latest":
-            issues.append(_Issue(
-                "warn",
-                f"{pkg.name}@latest — unpinned dependency",
-                hint=f"pin an exact version: cpm add {pkg.name}@<version>",
-            ))
+            issues.append(
+                _Issue(
+                    "warn",
+                    f"{pkg.name}@latest — unpinned dependency",
+                    hint=f"pin an exact version: cpm add {pkg.name}@<version>",
+                )
+            )
         elif constraint in ("", "*"):
-            issues.append(_Issue("warn", f"{pkg.name}@* — wildcard matches any version"))
-        elif "," not in constraint and "||" not in constraint \
-                and not _CONSTRAINT_RE.match(constraint):
+            issues.append(
+                _Issue("warn", f"{pkg.name}@* — wildcard matches any version")
+            )
+        elif (
+            "," not in constraint
+            and "||" not in constraint
+            and not _CONSTRAINT_RE.match(constraint)
+        ):
             try:
                 SpecifierSet(constraint)
             except InvalidSpecifier:
-                issues.append(_Issue(
-                    "error",
-                    f"{pkg.name}: malformed version constraint {constraint!r}",
-                    hint='use forms like "1.2", "^2.0", "~1.3", ">=1.0,<2"',
-                ))
+                issues.append(
+                    _Issue(
+                        "error",
+                        f"{pkg.name}: malformed version constraint {constraint!r}",
+                        hint='use forms like "1.2", "^2.0", "~1.3", ">=1.0,<2"',
+                    )
+                )
 
         pkg_dir = modules_dir / pkg.name
         if not pkg_dir.exists() or not any(pkg_dir.iterdir()):
-            issues.append(_Issue(
-                "warn",
-                f"{pkg.name} is declared but not installed",
-                hint="run 'cpm install'",
-            ))
+            issues.append(
+                _Issue(
+                    "warn",
+                    f"{pkg.name} is declared but not installed",
+                    hint="run 'cpm install'",
+                )
+            )
 
 
 def _check_lockfile(manifest, lockfile_path, modules_dir, issues):
@@ -1767,11 +2007,13 @@ def _check_lockfile(manifest, lockfile_path, modules_dir, issues):
 
     if lockfile_path is None:
         if manifest.packages:
-            issues.append(_Issue(
-                "warn",
-                "no cpm.lock found",
-                hint="run 'cpm install' for reproducible builds",
-            ))
+            issues.append(
+                _Issue(
+                    "warn",
+                    "no cpm.lock found",
+                    hint="run 'cpm install' for reproducible builds",
+                )
+            )
         return
 
     try:
@@ -1789,22 +2031,28 @@ def _check_lockfile(manifest, lockfile_path, modules_dir, issues):
 
         # Supply-chain integrity: checksums are mandatory.
         if not entry.checksum:
-            issues.append(_Issue(
-                "error",
-                f"{label}: locked without checksum",
-                hint="re-run 'cpm install' to record sha256 hashes",
-            ))
+            issues.append(
+                _Issue(
+                    "error",
+                    f"{label}: locked without checksum",
+                    hint="re-run 'cpm install' to record sha256 hashes",
+                )
+            )
         elif not _CHECKSUM_RE.match(entry.checksum):
-            issues.append(_Issue(
-                "error",
-                f"{label}: malformed checksum (want sha256:<64 hex>)",
-            ))
+            issues.append(
+                _Issue(
+                    "error",
+                    f"{label}: malformed checksum (want sha256:<64 hex>)",
+                )
+            )
 
         if entry.resolved and not entry.resolved.startswith("https://"):
-            issues.append(_Issue(
-                "error",
-                f"{label}: resolved over insecure transport",
-            ))
+            issues.append(
+                _Issue(
+                    "error",
+                    f"{label}: resolved over insecure transport",
+                )
+            )
 
         if entry.name and entry.version:
             try:
@@ -1813,30 +2061,36 @@ def _check_lockfile(manifest, lockfile_path, modules_dir, issues):
                 issues.append(_Issue("error", f"{label}: invalid locked version"))
 
         if not (modules_dir / entry.name / entry.version).exists():
-            issues.append(_Issue(
-                "warn",
-                f"{label}: locked but not installed",
-                hint="run 'cpm install'",
-            ))
+            issues.append(
+                _Issue(
+                    "warn",
+                    f"{label}: locked but not installed",
+                    hint="run 'cpm install'",
+                )
+            )
 
     # Manifest <-> lockfile cross-check
     for pkg in manifest.packages:
         entries = lock.get_all(pkg.name)
         if not entries:
-            issues.append(_Issue(
-                "warn",
-                f"{pkg.name}: no lockfile entry",
-                hint="run 'cpm install'",
-            ))
+            issues.append(
+                _Issue(
+                    "warn",
+                    f"{pkg.name}: no lockfile entry",
+                    hint="run 'cpm install'",
+                )
+            )
             continue
         constraint = pkg.version.strip()
         if not any(_constraint_satisfied(constraint, e.version) for e in entries):
             locked = ", ".join(sorted({e.version for e in entries}))
-            issues.append(_Issue(
-                "warn",
-                f"{pkg.name}: locked {locked} does not satisfy '{constraint}'",
-                hint=f"run 'cpm update {pkg.name}'",
-            ))
+            issues.append(
+                _Issue(
+                    "warn",
+                    f"{pkg.name}: locked {locked} does not satisfy '{constraint}'",
+                    hint=f"run 'cpm update {pkg.name}'",
+                )
+            )
 
 
 def _check_security(global_opt, fixable, issues):
@@ -1845,23 +2099,28 @@ def _check_security(global_opt, fixable, issues):
     if cred_file.exists():
         mode = stat_mod.S_IMODE(cred_file.stat().st_mode)
         if mode != 0o600:
+
             def _fix_perms():
                 cred_file.chmod(stat_mod.S_IRUSR | stat_mod.S_IWUSR)
 
-            issues.append(_Issue(
-                "error",
-                f"{cred_file}: permissions {oct(mode)} expose your token "
-                "to other users",
-                hint="must be 0600",
-                fix=_fix_perms if fixable else None,
-            ))
+            issues.append(
+                _Issue(
+                    "error",
+                    f"{cred_file}: permissions {oct(mode)} expose your token "
+                    "to other users",
+                    hint="must be 0600",
+                    fix=_fix_perms if fixable else None,
+                )
+            )
         for cred in auth_store.list_servers():
             if cred.token and cred.server.startswith("http://"):
-                issues.append(_Issue(
-                    "warn",
-                    f"auth token for {cred.server} is sent over plaintext HTTP",
-                    hint="use an HTTPS registry URL",
-                ))
+                issues.append(
+                    _Issue(
+                        "warn",
+                        f"auth token for {cred.server} is sent over plaintext HTTP",
+                        hint="use an HTTPS registry URL",
+                    )
+                )
 
 
 def validate_manifest(global_opt: GlobalOptions, command: ValidateCommand):
@@ -1882,7 +2141,7 @@ def validate_manifest(global_opt: GlobalOptions, command: ValidateCommand):
     issues: list[_Issue] = []
 
     try:
-        manifest = read_manifest(manifest_path)
+        manifest = read_manifest(manifest_path, target_os=_target_os(global_opt))
     except Exception as e:
         style.print_error(f"cpy.toml is not valid TOML: {e}")
         sys.exit(1)
@@ -1911,9 +2170,11 @@ def validate_manifest(global_opt: GlobalOptions, command: ValidateCommand):
     warns = [i for i in issues if i.severity == "warn"]
     infos = [i for i in issues if i.severity == "info"]
 
-    for group, printer in ((errors, style.print_error),
-                           (warns, style.print_warning),
-                           (infos, style.print_info)):
+    for group, printer in (
+        (errors, style.print_error),
+        (warns, style.print_warning),
+        (infos, style.print_info),
+    ):
         for issue in group:
             printer(issue.message)
             if issue.hint:
@@ -1926,7 +2187,9 @@ def validate_manifest(global_opt: GlobalOptions, command: ValidateCommand):
     if errors:
         parts.append(f"{style.Color.BOLD_RED}{len(errors)} error(s){style.Color.RESET}")
     if warns:
-        parts.append(f"{style.Color.BOLD_YELLOW}{len(warns)} warning(s){style.Color.RESET}")
+        parts.append(
+            f"{style.Color.BOLD_YELLOW}{len(warns)} warning(s){style.Color.RESET}"
+        )
     if fixed:
         parts.append(f"{style.Color.GREEN}{fixed} fixed{style.Color.RESET}")
     summary = ", ".join(parts) if parts else "all checks passed"

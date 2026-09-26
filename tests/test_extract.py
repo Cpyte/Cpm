@@ -27,14 +27,21 @@ def _make_pkg_dir(root: Path, name: str = "pkgroot") -> Path:
 def _make_tar(path: Path, pkg_root: Path, include_junk: bool = True):
     """Create a single-root .tar.gz; optionally embed macOS junk members."""
     import io
+
     path.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(path, "w:gz") as tf:
         for child in sorted(pkg_root.rglob("*")):
             arc = "pkgroot/" + str(child.relative_to(pkg_root))
             tf.add(child, arcname=arc)
         if include_junk:
-            for j in ("pkgroot/._package.json", "._pkgroot", "pkgroot/._src",
-                      "pkgroot/src/._main.cpy", "__MACOSX", ".DS_Store"):
+            for j in (
+                "pkgroot/._package.json",
+                "._pkgroot",
+                "pkgroot/._src",
+                "pkgroot/src/._main.cpy",
+                "__MACOSX",
+                ".DS_Store",
+            ):
                 info = tarfile.TarInfo(name=j)
                 info.size = 4
                 tf.addfile(info, io.BytesIO(b"JUNK"))
@@ -44,6 +51,7 @@ def _make_tar(path: Path, pkg_root: Path, include_junk: bool = True):
 # ---------------------------------------------------------------------------
 # extraction: normalization
 # ---------------------------------------------------------------------------
+
 
 class TestExtractNormalization:
     def test_flattens_single_root_dir(self, tmp_path):
@@ -70,11 +78,13 @@ class TestExtractNormalization:
 # cache -> module install
 # ---------------------------------------------------------------------------
 
+
 class TestInstallFromCache:
     def _setup_cache(self, tmp_path):
         pkg = _make_pkg_dir(tmp_path / "build")
-        tar = _make_tar(tmp_path / "cache" / "x" / "1.0" / "1.0.tar.gz", pkg,
-                        include_junk=True)
+        tar = _make_tar(
+            tmp_path / "cache" / "x" / "1.0" / "1.0.tar.gz", pkg, include_junk=True
+        )
         # pre-extract into cache, mimicking a prior download
         executor._extract(tar, tmp_path / "cache" / "x" / "1.0")
         return tmp_path

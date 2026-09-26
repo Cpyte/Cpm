@@ -25,9 +25,7 @@ class MissingArgumentError(CLIError):
     def __init__(self, argument: str, command: str) -> None:
         self.argument = argument
         self.command = command
-        super().__init__(
-            f"command '{command}' requires {argument}"
-        )
+        super().__init__(f"command '{command}' requires {argument}")
 
 
 class InvalidPackageSpecError(CLIError):

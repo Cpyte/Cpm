@@ -36,8 +36,16 @@ def test_instruction_without_sef() -> None:
 
 def test_resolve_get_sef_accepts_scorpion_package(monkeypatch) -> None:
     monkeypatch.setattr(
-        sat, "fetch_repo_multi",
-        FakeRepo({"name": "lib", "url": "http://x/lib.tar.gz", "version": "1.0", "scorpion": True}),
+        sat,
+        "fetch_repo_multi",
+        FakeRepo(
+            {
+                "name": "lib",
+                "url": "http://x/lib.tar.gz",
+                "version": "1.0",
+                "scorpion": True,
+            }
+        ),
     )
     instructions = resolve_get(["lib@1.0"], ["http://repo"], sef=True)
     assert len(instructions) == 1
@@ -47,8 +55,11 @@ def test_resolve_get_sef_accepts_scorpion_package(monkeypatch) -> None:
 
 def test_resolve_get_sef_accepts_sef_package(monkeypatch) -> None:
     monkeypatch.setattr(
-        sat, "fetch_repo_multi",
-        FakeRepo({"name": "lib", "url": "http://x/lib.tar.gz", "version": "1.0", "sef": True}),
+        sat,
+        "fetch_repo_multi",
+        FakeRepo(
+            {"name": "lib", "url": "http://x/lib.tar.gz", "version": "1.0", "sef": True}
+        ),
     )
     instructions = resolve_get(["lib@1.0"], ["http://repo"], sef=True)
     assert len(instructions) == 1
@@ -57,7 +68,8 @@ def test_resolve_get_sef_accepts_sef_package(monkeypatch) -> None:
 
 def test_resolve_get_sef_skips_plain_source_package(monkeypatch) -> None:
     monkeypatch.setattr(
-        sat, "fetch_repo_multi",
+        sat,
+        "fetch_repo_multi",
         FakeRepo({"name": "lib", "url": "http://x/lib.tar.gz", "version": "1.0"}),
     )
     instructions = resolve_get(["lib@1.0"], ["http://repo"], sef=True)
@@ -66,7 +78,8 @@ def test_resolve_get_sef_skips_plain_source_package(monkeypatch) -> None:
 
 def test_resolve_get_non_sef_still_resolves(monkeypatch) -> None:
     monkeypatch.setattr(
-        sat, "fetch_repo_multi",
+        sat,
+        "fetch_repo_multi",
         FakeRepo({"name": "lib", "url": "http://x/lib.tar.gz", "version": "1.0"}),
     )
     instructions = resolve_get(["lib@1.0"], ["http://repo"], sef=False)

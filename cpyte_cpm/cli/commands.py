@@ -55,11 +55,11 @@ class UpdateCommand:
 
 @dataclass(frozen=True)
 class BuildCommand:
-    opt: bool = False            # -O2 optimization (default)
-    osize: bool = False          # optimize for size (-Os)
-    debug: bool = False          # include debug info (-g)
-    lto: bool = False            # link-time optimization
-    scorpion: bool = False       # also produce a .sef (Scorpion RISC-V) artifact
+    opt: bool = False  # -O2 optimization (default)
+    osize: bool = False  # optimize for size (-Os)
+    debug: bool = False  # include debug info (-g)
+    lto: bool = False  # link-time optimization
+    scorpion: bool = False  # also produce a .sef (Scorpion RISC-V) artifact
 
 
 @dataclass(frozen=True)

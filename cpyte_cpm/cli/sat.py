@@ -18,7 +18,9 @@ def calculate_checksum(file_path: str, algorithm: str = "sha256") -> str:
     return f"{algorithm}:{hash_func.hexdigest()}"
 
 
-def _build_instruction(metadata: dict, prebuilt: bool = False, sef: bool = False) -> dict:
+def _build_instruction(
+    metadata: dict, prebuilt: bool = False, sef: bool = False
+) -> dict:
     """Build a rich instruction dict from package metadata.
 
     The instruction carries everything the executor needs:
@@ -59,7 +61,7 @@ def _parse_package(pkg) -> tuple[str, str]:
     if pkg.startswith("@"):
         if "@" in pkg[1:]:
             idx = pkg.index("@", 1)
-            return pkg[:idx], pkg[idx + 1:]
+            return pkg[:idx], pkg[idx + 1 :]
         return pkg, "latest"
 
     # Regular: name@version
@@ -83,7 +85,9 @@ def _package_path(name: str) -> str:
     return name
 
 
-def _check_version_compat(package_version: str, project_version: str, label: str) -> bool:
+def _check_version_compat(
+    package_version: str, project_version: str, label: str
+) -> bool:
     """Check if a package's version is compatible with the project's version.
 
     Compatible means: major version matches (semver).
@@ -137,16 +141,33 @@ def _matches_toolchain(required: dict, detected: dict) -> tuple[bool, str]:
             if not actual:
                 return False, f"requires {key} {constraint} (toolchain not detected)"
             if not _version_satisfies(constraint, actual):
-                return False, f"requires {key} {constraint}, installed {key} is {actual}"
+                return (
+                    False,
+                    f"requires {key} {constraint}, installed {key} is {actual}",
+                )
         elif key == "codegen":
             features = constraint if isinstance(constraint, list) else [constraint]
             for feature in features:
                 if not has_codegen_feature(str(feature)):
-                    return False, f"requires codegen feature '{feature}' (not supported by installed compiler)"
+                    return (
+                        False,
+                        f"requires codegen feature '{feature}' (not supported by installed compiler)",
+                    )
     return True, ""
 
 
-def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None, target: Target = None, prebuilt: bool = False, sef: bool = False, llvm_version: str = None, cpyte_version: str = None, capabilities: dict = None):
+def resolve_get(
+    packages: list,
+    repos: list[str],
+    resolving=None,
+    resolved=None,
+    target: Target = None,
+    prebuilt: bool = False,
+    sef: bool = False,
+    llvm_version: str = None,
+    cpyte_version: str = None,
+    capabilities: dict = None,
+):
     """Resolve dependency tree into a flat instruction stream (GET only).
 
     Pipeline stage: Resolve -> Lower -> Optimize -> Execute
@@ -219,7 +240,7 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
                 f"metadata/{path}/{version}",
                 f"metadata/{path}/latest",  # fallback to latest if version not found
             ]
-        
+
         metadata = None
         last_error = None
         for metadata_path in paths_to_try:
@@ -229,18 +250,22 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
             except Exception as e:
                 last_error = e
                 continue
-        
+
         # If regular metadata fetch fails, try to get metadata from packages list
         if metadata is None:
             try:
                 metadata = find_package_metadata(repos, name)
                 if metadata:
-                    style.print_verbose(f"  Using metadata from packages list for {name}")
+                    style.print_verbose(
+                        f"  Using metadata from packages list for {name}"
+                    )
             except Exception as e:
                 last_error = e
-        
+
         if metadata is None:
-            raise last_error or RuntimeError(f"Could not fetch metadata for {name}@{version}")
+            raise last_error or RuntimeError(
+                f"Could not fetch metadata for {name}@{version}"
+            )
 
         # Check claims — skip packages that don't match target
         claims = metadata.get("claims", {})
@@ -252,7 +277,11 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
 
         # SEF mode: the package must actually ship a SEF artifact
         if sef and not (metadata.get("sef") or metadata.get("scorpion")):
-            style.print_skipped(name, version, "package is not a SEF artifact (no 'sef'/'scorpion' in metadata)")
+            style.print_skipped(
+                name,
+                version,
+                "package is not a SEF artifact (no 'sef'/'scorpion' in metadata)",
+            )
             resolving.remove(name)
             resolved.add(name)
             continue
@@ -268,7 +297,9 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
                     resolved.add(name)
                     continue
             else:
-                style.print_verbose(f"  {name}: declares toolchain requirements but no compiler detected; skipping check")
+                style.print_verbose(
+                    f"  {name}: declares toolchain requirements but no compiler detected; skipping check"
+                )
 
         # Check LLVM version compatibility for prebuilt packages
         if prebuilt and llvm_version:
@@ -282,8 +313,12 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
         # Check Cpyte compiler version compatibility for prebuilt packages
         if prebuilt and cpyte_version:
             pkg_cpyte = metadata.get("cpyte_version", "")
-            if pkg_cpyte and not _check_version_compat(pkg_cpyte, cpyte_version, "cpyte"):
-                style.print_skipped(name, version, f"cpyte {pkg_cpyte} != {cpyte_version}")
+            if pkg_cpyte and not _check_version_compat(
+                pkg_cpyte, cpyte_version, "cpyte"
+            ):
+                style.print_skipped(
+                    name, version, f"cpyte {pkg_cpyte} != {cpyte_version}"
+                )
                 resolving.remove(name)
                 resolved.add(name)
                 continue
@@ -292,7 +327,18 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
 
         if requirements:
             instructions.append(
-                resolve_get(requirements, repos, resolving, resolved, target, prebuilt, sef, llvm_version, cpyte_version, capabilities)
+                resolve_get(
+                    requirements,
+                    repos,
+                    resolving,
+                    resolved,
+                    target,
+                    prebuilt,
+                    sef,
+                    llvm_version,
+                    cpyte_version,
+                    capabilities,
+                )
             )
 
         instructions.append(_build_instruction(metadata, prebuilt, sef))
@@ -303,7 +349,15 @@ def resolve_get(packages: list, repos: list[str], resolving=None, resolved=None,
     return instructions
 
 
-def resolve_remove(packages: list, repos: list[str], resolving=None, resolved=None, target: Target = None, prebuilt: bool = False, llvm_version: str = None):
+def resolve_remove(
+    packages: list,
+    repos: list[str],
+    resolving=None,
+    resolved=None,
+    target: Target = None,
+    prebuilt: bool = False,
+    llvm_version: str = None,
+):
     """Resolve dependency tree into a flat instruction stream (REMOVE only).
 
     For removal, we don't need metadata - just remove the packages by name.

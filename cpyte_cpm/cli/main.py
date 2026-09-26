@@ -72,6 +72,7 @@ def dispatch(parsed: ParsedCLI) -> None:
             update_deps,
             validate_manifest,
         )
+
         register_handler(InitCommand, init_project)
         register_handler(AddCommand, add_deps)
         register_handler(RemoveCommand, remove_deps)
@@ -101,6 +102,7 @@ def dispatch(parsed: ParsedCLI) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     from .http_session import close_session
+
     try:
         parsed = parse_args(argv)
     except CLIError as exc:
@@ -131,6 +133,7 @@ def main(argv: list[str] | None = None) -> None:
     except Exception as exc:
         if parsed.global_options.verbose:
             import traceback
+
             traceback.print_exc()
         else:
             style.print_error(f"unexpected error: {exc}")
