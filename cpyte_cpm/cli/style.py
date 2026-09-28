@@ -182,15 +182,21 @@ def is_json_mode() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def print_error(msg: str, file=sys.stderr):
+def print_error(msg: str, file=None):
     """Print an error message to stderr."""
-    print(f"{Color.BOLD_RED}{GLYPH_BAD} error:{Color.RESET} {msg}", file=file)
+    print(
+        f"{Color.BOLD_RED}{GLYPH_BAD} error:{Color.RESET} {msg}",
+        file=file or sys.stderr,
+    )
 
 
-def print_warning(msg: str, file=sys.stderr):
+def print_warning(msg: str, file=None):
     """Print a warning message to stderr."""
     if not _QUIET:
-        print(f"{Color.BOLD_YELLOW}{GLYPH_WARN} warning:{Color.RESET} {msg}", file=file)
+        print(
+            f"{Color.BOLD_YELLOW}{GLYPH_WARN} warning:{Color.RESET} {msg}",
+            file=file or sys.stderr,
+        )
 
 
 def print_success(msg: str):
@@ -367,8 +373,10 @@ class Spinner:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._frames = SPINNER_FRAMES if _COLORS else _SPINNER_ASCII
+        self._failed = False
 
     def __enter__(self) -> Spinner:
+        self._failed = False
         if _tty():
             self._thread = threading.Thread(target=self._animate, daemon=True)
             self._stop.clear()
@@ -377,16 +385,26 @@ class Spinner:
             self._print_static()
         return self
 
-    def __exit__(self, *exc) -> None:
+    def __exit__(self, exc_type, exc, tb) -> None:
         if self._thread:
             self._stop.set()
             self._thread.join(timeout=0.3)
             sys.stdout.write("\r" + " " * (len(self._line()) + 4) + "\r")
             sys.stdout.flush()
+        if exc_type is not None:
+            self._failed = True
         self._print_done()
 
     def set_text(self, text: str):
         self.text = text
+
+    def fail(self) -> None:
+        """Mark the operation as failed so the summary line is not a false ✓.
+
+        Call this inside the ``with`` block when the work reports a non-zero
+        status instead of raising.
+        """
+        self._failed = True
 
     def _line(self) -> str:
         return f" {GLYPH_SPIN} {self.text}" if self.text else " working..."
@@ -408,7 +426,10 @@ class Spinner:
     def _print_done(self):
         if _tty() or not self.text:
             return
-        print(f"  {Color.GREEN}{GLYPH_OK} {self.text} — done{Color.RESET}")
+        if self._failed:
+            print(f"  {Color.RED}{GLYPH_BAD} {self.text} — failed{Color.RESET}")
+        else:
+            print(f"  {Color.GREEN}{GLYPH_OK} {self.text} — done{Color.RESET}")
 
 
 def progress_bar(

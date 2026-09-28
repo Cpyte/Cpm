@@ -839,6 +839,37 @@ def update_deps(global_opt: GlobalOptions, command: UpdateCommand):
 # ---------------------------------------------------------------------------
 
 
+def _explain_scorpion_failure(pic: bool) -> None:
+    """Report the actual reason a SEF build failed.
+
+    The failure mode is not always a missing RISC-V toolchain: with ``pic``
+    enabled the compiler also needs its ELF->SEF v2 converter, which resolves
+    into a ``WEW-scorpion`` checkout that shipped distributions do not include.
+    Guessing "install the RISC-V toolchain" sends people down the wrong path.
+    """
+    diag = cpyte_toolchain.detect_scorpion()
+
+    if not diag.can_compile:
+        style.print_warning(
+            "No RISC-V cross-compiler found — install riscv*-elf-gcc to cross-compile."
+        )
+        return
+
+    cc_name = Path(diag.cc).name if diag.cc else "riscv*-elf-gcc"
+    style.print_warning(f"RISC-V toolchain is present ({cc_name}).")
+
+    if pic and not diag.can_emit_dynamic:
+        style.print_warning("The ELF->SEF v2 converter is not installed.")
+        if diag.elf2sef_error:
+            style.print_warning(f"  {diag.elf2sef_error}")
+        style.print_warning(
+            "Set pic = false under [cpm.build] to emit a static SEF, or install "
+            "WEW-scorpion/tools/elf2sef.py."
+        )
+    else:
+        style.print_warning("See the compiler output above for details.")
+
+
 def build_project(global_opt: GlobalOptions, command: BuildCommand):
     """Build the project.
 
@@ -914,18 +945,18 @@ def build_project(global_opt: GlobalOptions, command: BuildCommand):
     # Scorpion-ready projects also pre-compile a .sef artifact
     if command.scorpion or manifest.scorpion:
         style.print_header(f"Scorpion (RISC-V) build for {entry.name}")
-        with style.Spinner("cross-compiling to SEF"):
+        with style.Spinner("cross-compiling to SEF") as sp:
             sef_rc, sef_path = cpyte_toolchain.emit_scorpion(
                 entry,
                 cwd=project_dir,
                 pic=manifest.build.pic,
                 exports=manifest.build.exports or None,
             )
+            if sef_rc != 0:
+                sp.fail()
         if sef_rc != 0:
             style.print_error(f"Scorpion build failed with exit code {sef_rc}")
-            style.print_warning(
-                "Install the RISC-V toolchain (riscv*-elf-gcc) to cross-compile."
-            )
+            _explain_scorpion_failure(manifest.build.pic)
             sys.exit(sef_rc)
         if sef_path.exists():
             style.print_success(f"Wrote {sef_path.name}")
@@ -1113,6 +1144,29 @@ def doctor_project(global_opt: GlobalOptions, command: DoctorCommand):
             lines.append(f"  {feature:14} {mark}")
         style.box("Codegen Features", lines)
 
+    scorpion = report.get("scorpion")
+    if scorpion:
+        yes = f"{style.Color.GREEN}ok{style.Color.RESET}"
+        no = f"{style.Color.RED}missing{style.Color.RESET}"
+        style.box(
+            "Scorpion (SEF)",
+            [
+                f"  cross compiler : {scorpion['cross_compiler'] or '-'}"
+                + (f"  {yes}" if scorpion["cross_compiler"] else f"  {no}"),
+                "  static  (pic = false) : "
+                + (yes if scorpion["can_emit_static"] else no),
+                "  dynamic (pic = true)  : "
+                + (yes if scorpion["can_emit_dynamic"] else no),
+            ],
+        )
+        if not scorpion["can_emit_dynamic"] and scorpion["elf2sef_error"]:
+            style.print_warning(
+                f"  ELF->SEF v2 converter unavailable: {scorpion['elf2sef_error']}"
+            )
+            style.print_info(
+                "  Set pic = false under [cpm.build] for a static SEF instead."
+            )
+
     if not compiler["detected"]:
         if compiler["module_error"]:
             style.print_warning(f"  python import failed: {compiler['module_error']}")
@@ -1214,7 +1268,7 @@ def login_device(global_opt: GlobalOptions, command: LoginCommand):
     interval = max(1, int(data.get("interval", DEVICE_POLL_INTERVAL)))
     deadline = time.time() + min(expires_in, DEVICE_TIMEOUT) + 5
 
-    with style.Spinner("waiting for approval"):
+    with style.Spinner("waiting for approval") as sp:
         while time.time() < deadline:
             try:
                 poll = rq.post(
@@ -1241,6 +1295,8 @@ def login_device(global_opt: GlobalOptions, command: LoginCommand):
                 continue
             # unexpected response shape — back off and retry
             time.sleep(interval)
+        else:
+            sp.fail()
 
     style.print_error(
         "Login was not approved in time" if status != "denied" else "Login denied"
@@ -1374,8 +1430,10 @@ def publish_package(global_opt: GlobalOptions, command: PublishCommand):
         return
 
     # Validate the package manifest with the Cpyte compiler's own validator
-    with style.Spinner("validating package.json"):
+    with style.Spinner("validating package.json") as sp:
         ok, errors = cpyte_toolchain.validate_package_json(package_dir)
+        if not ok:
+            sp.fail()
     if not ok:
         style.print_error(f"package.json failed validation for {command.name}:")
         for err in errors:

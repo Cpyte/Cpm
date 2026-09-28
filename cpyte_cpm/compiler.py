@@ -209,6 +209,153 @@ def emit_scorpion(
 
 
 # ---------------------------------------------------------------------------
+# Scorpion / SEF toolchain diagnosis
+# ---------------------------------------------------------------------------
+
+_SCORPION_CC_CANDIDATES = (
+    "riscv32-unknown-elf-gcc",
+    "riscv64-unknown-elf-gcc",
+    "riscv64-elf-gcc",
+)
+
+
+@dataclass
+class ScorpionInfo:
+    """What the local toolchain can and cannot produce for SEF builds."""
+
+    cc: str | None = None
+    elf2sef: str | None = None
+    elf2sef_error: str = ""
+
+    @property
+    def can_compile(self) -> bool:
+        """A RISC-V cross-compiler is available, so ELF codegen and linking work."""
+        return self.cc is not None
+
+    @property
+    def can_emit_dynamic(self) -> bool:
+        """The ELF->SEF v2 converter is available, so ``pic = true`` can work."""
+        return self.can_compile and self.elf2sef is not None
+
+
+def _elf2sef_for(runtime_c: str) -> tuple[str | None, str]:
+    """Resolve the ``elf2sef.py`` helper the way the compiler does.
+
+    cpyte 4.3.2 bundles the converter inside the package so that installed
+    wheels work standalone. Older releases only found it in a ``WEW-scorpion``
+    sibling checkout, which pip/brew installs never had. Check both so the
+    diagnosis matches the compiler CPM will actually invoke.
+    """
+    bundled = os.path.join(os.path.dirname(runtime_c), "elf2sef.py")
+    if os.path.isfile(bundled):
+        return bundled, ""
+
+    sibling = os.path.normpath(
+        os.path.join(
+            os.path.dirname(os.path.dirname(runtime_c)),
+            "..",
+            "..",
+            "WEW-scorpion",
+            "tools",
+            "elf2sef.py",
+        )
+    )
+    if os.path.isfile(sibling):
+        return sibling, ""
+
+    return None, (
+        f"not bundled in the cpyte package and not found at {sibling} "
+        "(cpyte < 4.3.2 needs a WEW-scorpion source checkout)"
+    )
+
+
+def _scorpion_runtime_c() -> tuple[str | None, str]:
+    """Return the ``runtime_scorpion.c`` that :func:`compiler_command` will use.
+
+    CPM drives the ``cpy`` binary in preference to the importable ``cpyte``
+    module, and the two can come from different environments and versions. The
+    SEF converter is resolved *inside* that cpyte package, so diagnosing the
+    package we happen to be imported from would describe the wrong toolchain.
+    Ask the interpreter behind the resolved command instead.
+    """
+    cmd = compiler_command()
+
+    # `python -m cpyte` fallback: our own environment is the one that will run.
+    if len(cmd) > 1:
+        try:
+            from cpyte import compiling
+
+            return getattr(compiling, "_RUNTIME_SCORPION_C", "") or None, ""
+        except Exception as e:
+            return None, f"compiler internals unavailable: {e}"
+
+    binary = cmd[0]
+    try:
+        with open(binary, "rb") as fh:
+            shebang = fh.readline().decode("utf-8", "replace").strip()
+    except OSError as e:
+        return None, f"cannot read {binary}: {e}"
+
+    if not shebang.startswith("#!"):
+        return None, f"{binary} has no interpreter line"
+
+    interp = shebang[2:].strip().split()
+    if not interp:
+        return None, f"{binary} has an empty interpreter line"
+    # `#!/usr/bin/env python3` names `env`, not the interpreter.
+    if os.path.basename(interp[0]) == "env":
+        interp = interp[1:]
+    if not interp:
+        return None, f"{binary} interpreter line names no program"
+
+    try:
+        out = subprocess.run(
+            [interp[0], "-c", "import cpyte.compiling as c; print(c._RUNTIME_SCORPION_C)"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, f"cannot query {interp[0]}: {e}"
+
+    if out.returncode != 0:
+        detail = (out.stderr or "").strip().splitlines()
+        return None, detail[-1] if detail else f"{interp[0]} has no cpyte module"
+
+    return out.stdout.strip() or None, ""
+
+
+def _scorpion_elf2sef_path() -> tuple[str | None, str]:
+    """Locate the ``elf2sef.py`` helper that turns a linked ELF into SEF v2.
+
+    The compiler resolves this relative to its own runtime source file, which
+    points into a ``WEW-scorpion`` sibling checkout. That checkout is not part
+    of the installed distribution, so the lookup fails for any pip/brew install
+    even when the rest of the toolchain is healthy. We mirror the lookup purely
+    so a failed build can report the real cause instead of guessing.
+    """
+    runtime_c, error = _scorpion_runtime_c()
+    if error:
+        return None, error
+    if not runtime_c or not os.path.isfile(runtime_c):
+        return None, "compiler runtime_scorpion.c is not installed"
+
+    return _elf2sef_for(runtime_c)
+
+
+def detect_scorpion() -> ScorpionInfo:
+    """Report the RISC-V cross-compilation readiness of the local toolchain."""
+    info = ScorpionInfo()
+    for name in _SCORPION_CC_CANDIDATES:
+        found = shutil.which(name)
+        if found:
+            info.cc = found
+            break
+    info.elf2sef, info.elf2sef_error = _scorpion_elf2sef_path()
+    return info
+
+
+# ---------------------------------------------------------------------------
 # Toolchain capability detection
 # ---------------------------------------------------------------------------
 
@@ -382,6 +529,15 @@ def diagnose() -> dict[str, Any]:
     report["toolchain_capabilities"] = toolchain_capabilities()
     if info.available:
         report["codegen"] = probe_codegen_features()
+
+    scorpion = detect_scorpion()
+    report["scorpion"] = {
+        "cross_compiler": scorpion.cc,
+        "elf2sef": scorpion.elf2sef,
+        "elf2sef_error": scorpion.elf2sef_error or None,
+        "can_emit_static": scorpion.can_compile,
+        "can_emit_dynamic": scorpion.can_emit_dynamic,
+    }
 
     # Workspace / registry checks
     manifest = _safe_read_manifest()
